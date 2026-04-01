@@ -38,13 +38,8 @@ function pickColor(email: string): string {
   return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
 }
 
-// Default demo users
-const DEFAULT_USERS: AuthUser[] = [
-  { id: "u1", name: "Andrey", email: "andrey@redking.co", password: btoa("admin123"), avatar: "A", role: "owner", color: "bg-blue-600", createdAt: "2024-01-01T00:00:00.000Z" },
-  { id: "u2", name: "María", email: "maria@redking.co", password: btoa("maria123"), avatar: "M", role: "editor", color: "bg-purple-600", createdAt: "2024-01-01T00:00:00.000Z" },
-  { id: "u3", name: "Carlos", email: "carlos@redking.co", password: btoa("carlos123"), avatar: "C", role: "editor", color: "bg-emerald-600", createdAt: "2024-01-01T00:00:00.000Z" },
-  { id: "u4", name: "Ana", email: "ana@redking.co", password: btoa("ana123"), avatar: "AN", role: "editor", color: "bg-pink-600", createdAt: "2024-01-01T00:00:00.000Z" },
-];
+// Users array starts empty — first registered user becomes owner
+const DEFAULT_USERS: AuthUser[] = [];
 
 interface AuthState {
   users: AuthUser[];

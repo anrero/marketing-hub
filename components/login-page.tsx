@@ -127,10 +127,6 @@ export function LoginPage() {
           )}
         </div>
 
-        {/* Demo hint */}
-        <p className="text-center text-[10px] text-muted-foreground">
-          Demo: <span className="font-medium">andrey@redking.co</span> / <span className="font-medium">admin123</span>
-        </p>
       </div>
     </div>
   );
