@@ -1,0 +1,236 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id          String   @id @default(cuid())
+  name        String
+  email       String   @unique
+  password    String
+  avatarColor String   @default("#3b82f6")
+  role        String   @default("editor")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspaceId String?
+  workspace   Workspace? @relation(fields: [workspaceId], references: [id])
+
+  tasks        Task[]       @relation("assignee")
+  createdTasks Task[]       @relation("creator")
+  comments     Comment[]
+  activities   Activity[]
+  chatMessages ChatMessage[]
+}
+
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String
+  emoji     String   @default("🚀")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members     User[]
+  boards      Board[]
+  pages       Page[]
+  tags        Tag[]
+  invitations Invitation[]
+}
+
+model Board {
+  id          String    @id @default(cuid())
+  name        String
+  emoji       String    @default("📋")
+  position    Int       @default(0)
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  columns Column[]
+  tasks   Task[]
+}
+
+model Column {
+  id       String @id @default(cuid())
+  name     String
+  color    String @default("#6b7280")
+  position Int    @default(0)
+  wipLimit Int?
+  boardId  String
+  board    Board  @relation(fields: [boardId], references: [id], onDelete: Cascade)
+
+  tasks Task[]
+}
+
+model Task {
+  id            String    @id @default(cuid())
+  title         String
+  description   String?   @db.Text
+  status        String    @default("por_hacer")
+  priority      String    @default("media")
+  position      Int       @default(0)
+  dueDate       DateTime?
+  reminder      String?
+  store         String?
+  adAccount     String?
+  campaignType  String?
+  campaignName  String?
+  coverImage    String?
+  estimatedTime Float?
+  estimatedUnit String?
+  realTime      Float?
+  realUnit      String?
+  archivedAt    DateTime?
+  deletedAt     DateTime?
+
+  boardId     String
+  board       Board   @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  columnId    String?
+  column      Column? @relation(fields: [columnId], references: [id])
+  assigneeId  String?
+  assignee    User?   @relation("assignee", fields: [assigneeId], references: [id])
+  createdById String?
+  createdBy   User?   @relation("creator", fields: [createdById], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  subtasks    Subtask[]
+  comments    Comment[]
+  activities  Activity[]
+  attachments Attachment[]
+  urls        TaskUrl[]
+  tags        TaskTag[]
+  blockedBy   TaskDependency[] @relation("blocked")
+  blocking    TaskDependency[] @relation("blocker")
+}
+
+model Subtask {
+  id        String  @id @default(cuid())
+  title     String
+  completed Boolean @default(false)
+  position  Int     @default(0)
+  taskId    String
+  task      Task    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  content   String   @db.Text
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id])
+  createdAt DateTime @default(now())
+}
+
+model Activity {
+  id        String   @id @default(cuid())
+  action    String
+  field     String?
+  oldValue  String?
+  newValue  String?
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+}
+
+model Attachment {
+  id        String   @id @default(cuid())
+  name      String
+  size      Int
+  type      String
+  url       String
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+}
+
+model TaskUrl {
+  id     String @id @default(cuid())
+  url    String
+  taskId String
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+}
+
+model Tag {
+  id          String    @id @default(cuid())
+  name        String
+  color       String
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  tasks       TaskTag[]
+}
+
+model TaskTag {
+  taskId String
+  tagId  String
+  task   Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  tag    Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, tagId])
+}
+
+model TaskDependency {
+  id        String @id @default(cuid())
+  blockedId String
+  blocked   Task   @relation("blocked", fields: [blockedId], references: [id], onDelete: Cascade)
+  blockerId String
+  blocker   Task   @relation("blocker", fields: [blockerId], references: [id], onDelete: Cascade)
+}
+
+model Page {
+  id          String    @id @default(cuid())
+  title       String    @default("Sin título")
+  emoji       String    @default("📄")
+  coverImage  String?
+  isPrivate   Boolean   @default(false)
+  position    Int       @default(0)
+  parentId    String?
+  parent      Page?     @relation("subpages", fields: [parentId], references: [id])
+  children    Page[]    @relation("subpages")
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  blocks Block[]
+}
+
+model Block {
+  id         String @id @default(cuid())
+  type       String @default("text")
+  content    String @default("") @db.Text
+  properties Json?
+  position   Int    @default(0)
+  pageId     String
+  page       Page   @relation(fields: [pageId], references: [id], onDelete: Cascade)
+}
+
+model ChatMessage {
+  id          String   @id @default(cuid())
+  text        String   @db.Text
+  channelType String
+  channelId   String
+  senderId    String
+  sender      User     @relation(fields: [senderId], references: [id])
+  read        Boolean  @default(false)
+  createdAt   DateTime @default(now())
+}
+
+model Invitation {
+  id          String    @id @default(cuid())
+  email       String
+  role        String    @default("editor")
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+}
