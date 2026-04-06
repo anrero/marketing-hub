@@ -22,10 +22,28 @@ async function main() {
     data: { name: "Andrey", email: "andrey@redking.co", password: hash, role: "owner", avatarColor: "#3b82f6", workspaceId: ws.id },
   });
 
-  // Team members
+  // Team members (original)
+  const teamHash = await bcrypt.hash("redking2026", 10);
   const maria = await prisma.user.create({ data: { name: "María", email: "maria@redking.co", password: await bcrypt.hash("maria123", 10), role: "editor", avatarColor: "#a855f7", workspaceId: ws.id } });
   const carlos = await prisma.user.create({ data: { name: "Carlos", email: "carlos@redking.co", password: await bcrypt.hash("carlos123", 10), role: "editor", avatarColor: "#22c55e", workspaceId: ws.id } });
   const ana = await prisma.user.create({ data: { name: "Ana", email: "ana@redking.co", password: await bcrypt.hash("ana123", 10), role: "editor", avatarColor: "#ec4899", workspaceId: ws.id } });
+
+  // Extended team
+  await prisma.user.createMany({
+    data: [
+      { name: "Fabian", email: "fabian@redking.co", password: teamHash, role: "editor", avatarColor: "#f97316", workspaceId: ws.id },
+      { name: "Manuel", email: "manuel@redking.co", password: teamHash, role: "editor", avatarColor: "#14b8a6", workspaceId: ws.id },
+      { name: "Valeria", email: "valeria@redking.co", password: teamHash, role: "editor", avatarColor: "#8b5cf6", workspaceId: ws.id },
+      { name: "Julian", email: "julian@redking.co", password: teamHash, role: "editor", avatarColor: "#ef4444", workspaceId: ws.id },
+      { name: "Daniel", email: "daniel@redking.co", password: teamHash, role: "editor", avatarColor: "#06b6d4", workspaceId: ws.id },
+      { name: "David", email: "david@redking.co", password: teamHash, role: "editor", avatarColor: "#d946ef", workspaceId: ws.id },
+      { name: "Karen", email: "karen@redking.co", password: teamHash, role: "editor", avatarColor: "#84cc16", workspaceId: ws.id },
+      { name: "Alejandra", email: "alejandra@redking.co", password: teamHash, role: "editor", avatarColor: "#f43f5e", workspaceId: ws.id },
+      { name: "Denis", email: "denis@redking.co", password: teamHash, role: "editor", avatarColor: "#0ea5e9", workspaceId: ws.id },
+      { name: "Karol", email: "karol@redking.co", password: teamHash, role: "editor", avatarColor: "#eab308", workspaceId: ws.id },
+      { name: "Tatiana", email: "tatiana@redking.co", password: teamHash, role: "editor", avatarColor: "#6366f1", workspaceId: ws.id },
+    ],
+  });
 
   // Tags
   await prisma.tag.createMany({

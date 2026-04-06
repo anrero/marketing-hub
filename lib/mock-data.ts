@@ -32,6 +32,17 @@ export const TEAM_MEMBERS: TeamMember[] = [
   { id: "u2", name: "María", avatar: "M", role: "Creative Director" },
   { id: "u3", name: "Carlos", avatar: "C", role: "Copywriter" },
   { id: "u4", name: "Ana", avatar: "AN", role: "Diseñadora" },
+  { id: "u5", name: "Fabian", avatar: "F", role: "Editor" },
+  { id: "u6", name: "Manuel", avatar: "MA", role: "Editor" },
+  { id: "u7", name: "Valeria", avatar: "V", role: "Editor" },
+  { id: "u8", name: "Julian", avatar: "J", role: "Editor" },
+  { id: "u9", name: "Daniel", avatar: "D", role: "Editor" },
+  { id: "u10", name: "David", avatar: "DA", role: "Editor" },
+  { id: "u11", name: "Karen", avatar: "K", role: "Editor" },
+  { id: "u12", name: "Alejandra", avatar: "AL", role: "Editor" },
+  { id: "u13", name: "Denis", avatar: "DE", role: "Editor" },
+  { id: "u14", name: "Karol", avatar: "KA", role: "Editor" },
+  { id: "u15", name: "Tatiana", avatar: "T", role: "Editor" },
 ];
 
 export const BOARDS: Board[] = [
