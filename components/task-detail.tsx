@@ -128,15 +128,42 @@ export function TaskDetail() {
 
   const task = tasks.find((t) => t.id === selectedTaskId);
 
+  const [uploading, setUploading] = useState(false);
   const onDrop = useCallback(
-    (acceptedFiles: File[]) => {
+    async (acceptedFiles: File[]) => {
       if (!task) return;
-      const newAttachments = acceptedFiles.map((f) => ({
-        name: f.name,
-        size: f.size > 1024 * 1024 ? `${(f.size / (1024 * 1024)).toFixed(1)} MB` : `${(f.size / 1024).toFixed(0)} KB`,
-      }));
-      updateTask(task.id, { attachments: [...task.attachments, ...newAttachments] });
-      toast.success(`${newAttachments.length} archivo(s) adjuntado(s)`);
+      setUploading(true);
+      let uploaded = 0;
+      for (const file of acceptedFiles) {
+        try {
+          const formData = new FormData();
+          formData.append("file", file);
+          formData.append("taskId", task.id);
+          formData.append("field", "attachment");
+          const res = await fetch("/api/upload", { method: "POST", body: formData });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({ error: "Error al subir" }));
+            toast.error(err.error || "Error al subir archivo");
+            continue;
+          }
+          const saved = await res.json();
+          // Add to local store immediately
+          updateTask(task.id, {
+            attachments: [...(useBoardStore.getState().tasks.find((t) => t.id === task.id)?.attachments || []), {
+              id: saved.id,
+              name: saved.name,
+              size: saved.size >= 1048576 ? `${(saved.size / 1048576).toFixed(1)} MB` : `${(saved.size / 1024).toFixed(0)} KB`,
+              type: saved.type,
+              url: saved.url,
+            }],
+          });
+          uploaded++;
+        } catch {
+          toast.error(`Error al subir ${file.name}`);
+        }
+      }
+      setUploading(false);
+      if (uploaded > 0) toast.success(`${uploaded} archivo(s) subido(s)`);
     },
     [task, updateTask],
   );
@@ -273,7 +300,25 @@ export function TaskDetail() {
               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLElement).blur(); } }}
             />
             {!task.coverImage && (
-              <button onClick={() => { const url = prompt("URL de la imagen de portada:"); if (url) updateTask(task.id, { coverImage: url }); }}
+              <button onClick={() => {
+                const input = document.createElement("input");
+                input.type = "file";
+                input.accept = "image/*";
+                input.onchange = async () => {
+                  const file = input.files?.[0];
+                  if (!file) return;
+                  const formData = new FormData();
+                  formData.append("file", file);
+                  formData.append("field", "cover");
+                  try {
+                    const res = await fetch("/api/upload", { method: "POST", body: formData });
+                    if (!res.ok) { const err = await res.json().catch(() => ({})); toast.error(err.error || "Error al subir"); return; }
+                    const { url } = await res.json();
+                    updateTaskWithActivity(task.id, { coverImage: url });
+                  } catch { toast.error("Error al subir imagen"); }
+                };
+                input.click();
+              }}
                 className="text-[10px] text-muted-foreground/50 hover:text-muted-foreground mb-3 block transition-colors">
                 + Agregar portada
               </button>
@@ -564,21 +609,30 @@ export function TaskDetail() {
                   {task.attachments.map((att, i) => {
                     const ext = att.name.split(".").pop()?.toLowerCase() ?? "";
                     const isImage = ["png", "jpg", "jpeg", "gif", "webp"].includes(ext);
+                    const handleDelete = async () => {
+                      if (att.id) {
+                        await fetch(`/api/attachments?id=${att.id}`, { method: "DELETE" }).catch(() => {});
+                      }
+                      removeAttachment(task.id, i);
+                      toast.success("Archivo eliminado");
+                    };
                     return (
-                      <div key={i} className="relative flex items-center gap-3 rounded-lg bg-muted/40 px-3 py-2 group">
+                      <div key={att.id || i} className="relative flex items-center gap-3 rounded-lg bg-muted/40 px-3 py-2 group">
                         {getFileIcon(att.name)}
-                        <span className="flex-1 truncate text-xs peer">{att.name}</span>
+                        {att.url ? (
+                          <a href={att.url} target="_blank" rel="noopener noreferrer" className="flex-1 truncate text-xs text-primary hover:underline">{att.name}</a>
+                        ) : (
+                          <span className="flex-1 truncate text-xs">{att.name}</span>
+                        )}
                         <span className="text-[10px] text-muted-foreground">{att.size}</span>
-                        <button onClick={() => removeAttachment(task.id, i)}
+                        <button onClick={handleDelete}
                           className="opacity-0 group-hover:opacity-100 rounded p-0.5 hover:bg-destructive/20 hover:text-destructive transition-all">
                           <Trash2 className="h-3 w-3" />
                         </button>
-                        {isImage && (
+                        {isImage && att.url && (
                           <div className="absolute left-0 bottom-full mb-2 z-50 hidden group-hover:block pointer-events-none">
                             <div className="rounded-lg border border-border bg-popover shadow-xl overflow-hidden">
-                              <div className="w-48 h-32 bg-muted flex items-center justify-center text-[10px] text-muted-foreground">
-                                Vista previa de imagen
-                              </div>
+                              <img src={att.url} alt={att.name} className="w-48 h-32 object-cover" />
                             </div>
                           </div>
                         )}
@@ -587,10 +641,10 @@ export function TaskDetail() {
                   })}
                 </div>
               )}
-              <div {...getRootProps()} className={cn("cursor-pointer rounded-lg border-2 border-dashed border-border/60 p-5 text-center transition-colors hover:border-border", isDragActive && "border-primary bg-primary/5")}>
+              <div {...getRootProps()} className={cn("cursor-pointer rounded-lg border-2 border-dashed border-border/60 p-5 text-center transition-colors hover:border-border", isDragActive && "border-primary bg-primary/5", uploading && "opacity-50 pointer-events-none")}>
                 <input {...getInputProps()} />
                 <Upload className="mx-auto mb-1.5 h-5 w-5 text-muted-foreground/50" />
-                <p className="text-[11px] text-muted-foreground/70">{isDragActive ? "Suelta los archivos aquí..." : "Arrastra archivos o haz click para subir"}</p>
+                <p className="text-[11px] text-muted-foreground/70">{uploading ? "Subiendo archivos..." : isDragActive ? "Suelta los archivos aquí..." : "Arrastra archivos o haz click para subir"}</p>
               </div>
             </section>
 

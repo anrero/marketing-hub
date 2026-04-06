@@ -719,26 +719,53 @@ function getEmbedUrl(url: string): string | null {
 
 function MediaUploader({ type, onSubmit }: { type: string; onSubmit: (url: string, name?: string, size?: string) => void }) {
   const [url, setUrl] = useState("");
+  const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const labels: Record<string, string> = { image: "imagen", video: "video", file: "archivo", bookmark: "URL" };
   const accepts: Record<string, string> = { image: "image/*", video: "video/*", file: "*", bookmark: "" };
 
-  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (!f) return;
-    const blobUrl = URL.createObjectURL(f);
-    const size = f.size > 1024 * 1024 ? `${(f.size / (1024 * 1024)).toFixed(1)} MB` : `${(f.size / 1024).toFixed(0)} KB`;
-    onSubmit(blobUrl, f.name, size);
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", f);
+      formData.append("field", "block");
+      const res = await fetch("/api/upload", { method: "POST", body: formData });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        // Fallback to blob URL if Cloudinary not configured
+        if (res.status === 503) {
+          const blobUrl = URL.createObjectURL(f);
+          const size = f.size > 1024 * 1024 ? `${(f.size / (1024 * 1024)).toFixed(1)} MB` : `${(f.size / 1024).toFixed(0)} KB`;
+          onSubmit(blobUrl, f.name, size);
+          return;
+        }
+        console.error("Upload error:", err);
+        return;
+      }
+      const data = await res.json();
+      const size = f.size > 1024 * 1024 ? `${(f.size / (1024 * 1024)).toFixed(1)} MB` : `${(f.size / 1024).toFixed(0)} KB`;
+      onSubmit(data.url, f.name, size);
+    } catch {
+      // Fallback to blob URL on error
+      const blobUrl = URL.createObjectURL(f);
+      const size = f.size > 1024 * 1024 ? `${(f.size / (1024 * 1024)).toFixed(1)} MB` : `${(f.size / 1024).toFixed(0)} KB`;
+      onSubmit(blobUrl, f.name, size);
+    } finally {
+      setUploading(false);
+    }
   };
 
   return (
     <div className="rounded-lg border-2 border-dashed border-border p-4 text-center space-y-2">
-      <p className="text-xs text-muted-foreground">Agregar {labels[type] ?? type}</p>
+      <p className="text-xs text-muted-foreground">{uploading ? "Subiendo..." : `Agregar ${labels[type] ?? type}`}</p>
       <div className="flex items-center justify-center gap-2">
         {type !== "bookmark" && (
           <>
             <input ref={fileRef} type="file" accept={accepts[type]} onChange={handleFile} className="hidden" />
-            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => fileRef.current?.click()}>Subir archivo</Button>
+            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => fileRef.current?.click()} disabled={uploading}>{uploading ? "Subiendo..." : "Subir archivo"}</Button>
           </>
         )}
         <div className="flex items-center gap-1">
@@ -1122,12 +1149,44 @@ export function PageEditor() {
         {page.coverImage ? (
           <div className="relative -mx-4 md:-mx-8 mb-4 h-48 bg-cover bg-center group" style={{ backgroundImage: `url(${page.coverImage})` }}>
             <div className="absolute bottom-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-              <button onClick={() => { const url = prompt("Nueva URL de portada:"); if (url) updatePage(page.id, { coverImage: url }); }} className="rounded bg-black/50 px-2 py-0.5 text-[10px] text-white">Cambiar</button>
+              <button onClick={() => {
+                const input = document.createElement("input");
+                input.type = "file";
+                input.accept = "image/*";
+                input.onchange = async () => {
+                  const file = input.files?.[0];
+                  if (!file) return;
+                  const formData = new FormData();
+                  formData.append("file", file);
+                  formData.append("field", "cover");
+                  try {
+                    const res = await fetch("/api/upload", { method: "POST", body: formData });
+                    if (res.ok) { const { url } = await res.json(); updatePage(page.id, { coverImage: url }); }
+                  } catch { /* ignore */ }
+                };
+                input.click();
+              }} className="rounded bg-black/50 px-2 py-0.5 text-[10px] text-white">Cambiar</button>
               <button onClick={() => updatePage(page.id, { coverImage: null })} className="rounded bg-black/50 px-2 py-0.5 text-[10px] text-white">Quitar</button>
             </div>
           </div>
         ) : (
-          <button onClick={() => { const url = prompt("URL de la imagen de portada:"); if (url) updatePage(page.id, { coverImage: url }); }} className="text-[10px] text-muted-foreground hover:text-foreground mb-2">+ Agregar portada</button>
+          <button onClick={() => {
+            const input = document.createElement("input");
+            input.type = "file";
+            input.accept = "image/*";
+            input.onchange = async () => {
+              const file = input.files?.[0];
+              if (!file) return;
+              const formData = new FormData();
+              formData.append("file", file);
+              formData.append("field", "cover");
+              try {
+                const res = await fetch("/api/upload", { method: "POST", body: formData });
+                if (res.ok) { const { url } = await res.json(); updatePage(page.id, { coverImage: url }); }
+              } catch { /* ignore */ }
+            };
+            input.click();
+          }} className="text-[10px] text-muted-foreground hover:text-foreground mb-2">+ Agregar portada</button>
         )}
 
         {/* Emoji + Title */}

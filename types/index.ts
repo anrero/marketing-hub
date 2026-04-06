@@ -47,7 +47,7 @@ export interface Task {
   adAccount: string;
   dueDate: string;
   urls: string[];
-  attachments: { name: string; size: string }[];
+  attachments: { id?: string; name: string; size: string; type?: string; url?: string }[];
   comments: Comment[];
   activity: ActivityEntry[];
   customFields?: Record<string, string>;

@@ -234,9 +234,12 @@ function transformApiTask(apiTask: any): Task {
     adAccount: apiTask.adAccount || "",
     dueDate: apiTask.dueDate ? new Date(apiTask.dueDate).toISOString().split("T")[0] : "",
     urls: (apiTask.urls || []).map((u: { url: string }) => u.url),
-    attachments: (apiTask.attachments || []).map((a: { name: string; size: number }) => ({
+    attachments: (apiTask.attachments || []).map((a: { id: string; name: string; size: number; type?: string; url?: string }) => ({
+      id: a.id,
       name: a.name,
       size: a.size >= 1048576 ? `${(a.size / 1048576).toFixed(1)} MB` : `${(a.size / 1024).toFixed(0)} KB`,
+      type: a.type,
+      url: a.url,
     })),
     comments: (apiTask.comments || []).map((c: { id: string; authorId: string; content: string; createdAt: string }) => ({
       id: c.id,

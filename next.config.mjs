@@ -4,7 +4,7 @@ const nextConfig = {
     unoptimized: true,
   },
   experimental: {
-    serverComponentsExternalPackages: ["@prisma/client", "bcryptjs", "pg", "@prisma/adapter-pg"],
+    serverComponentsExternalPackages: ["@prisma/client", "bcryptjs", "pg", "@prisma/adapter-pg", "cloudinary"],
   },
 };
 
