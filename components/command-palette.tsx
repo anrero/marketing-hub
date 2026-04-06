@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useBoardStore } from "@/stores/board-store";
 import { useSidebarStore } from "@/stores/sidebar-store";
+import { useAuthStore } from "@/stores/auth-store";
 import { FileText } from "lucide-react";
 
 export function CommandPalette() {
@@ -29,6 +30,7 @@ export function CommandPalette() {
   } = useBoardStore();
 
   const { pages, setActivePageId, setMainView, addPage } = useSidebarStore();
+  const currentUser = useAuthStore((s) => s.currentUser);
   const allMembers = getAllTeamMembers();
 
   useEffect(() => {
@@ -89,12 +91,12 @@ export function CommandPalette() {
             <Command.Item
               onSelect={() => {
                 setCommandOpen(false);
-                setFilterAssignee("u1");
+                if (currentUser) setFilterAssignee(currentUser.id);
               }}
               className="flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2.5 text-sm aria-selected:bg-accent"
             >
               <User className="h-4 w-4 text-muted-foreground" />
-              Mis tareas (Andrey)
+              Mis tareas ({currentUser?.name ?? "Usuario"})
             </Command.Item>
             <Command.Item
               onSelect={() => {

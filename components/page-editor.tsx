@@ -88,7 +88,7 @@ function newBlock(type: BlockType = "text", content = ""): Block {
     ...(type === "table" ? { tableData: [["", "", ""], ["", "", ""], ["", "", ""]] } : {}),
     ...(type === "columns" ? { columnContents: ["", ""] } : {}),
     ...(type === "date" ? { content: new Date().toLocaleDateString("es-ES", { day: "numeric", month: "long", year: "numeric" }) } : {}),
-    ...(type === "mention" ? { content: "Andrey" } : {}),
+    ...(type === "mention" ? { content: content || "" } : {}),
   };
 }
 

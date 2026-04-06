@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import { useBoardStore } from "@/stores/board-store";
+import { useAuthStore } from "@/stores/auth-store";
 
 import {
   AlertCircle,
@@ -43,6 +44,7 @@ function timeAgo(isoStr: string): string {
 export function Dashboard() {
   const { tasks, boards, activeBoardId, setSelectedTask, getAllTeamMembers } =
     useBoardStore();
+  const currentUser = useAuthStore((s) => s.currentUser);
 
   const allMembers = useMemo(() => getAllTeamMembers(), [getAllTeamMembers]);
 
@@ -175,7 +177,7 @@ export function Dashboard() {
       <div className="max-w-5xl mx-auto space-y-8">
         {/* (a) Greeting */}
         <div>
-          <h1 className="text-2xl font-bold">{greeting}, Andrey</h1>
+          <h1 className="text-2xl font-bold">{greeting}, {currentUser?.name ?? "Usuario"}</h1>
           <p className="text-sm text-muted-foreground capitalize">{dateStr}</p>
         </div>
 
