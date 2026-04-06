@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getAuthUser } from "@/lib/auth";
 
 export async function PATCH(request: Request) {
   try {
+    const { error } = await getAuthUser(request);
+    if (error) return error;
     const { channelType, channelId, userId } = await request.json();
 
     if (channelType === "direct") {

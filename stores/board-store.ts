@@ -194,28 +194,35 @@ function getCurrentUserId(): string {
 
 // ── API helpers (fire-and-forget with error logging) ──
 
+function getAuthHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const userId = getCurrentUserId();
+  if (userId) headers["x-user-id"] = userId;
+  return headers;
+}
+
 function apiPatchTask(taskId: string, data: Record<string, unknown>) {
   fetch(`/api/tasks/${taskId}`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: getAuthHeaders(),
     body: JSON.stringify(data),
   }).catch((e) => console.error("API patch task error:", e));
 }
 
 function apiDeleteTask(taskId: string) {
-  fetch(`/api/tasks/${taskId}`, { method: "DELETE" }).catch((e) => console.error("API delete task error:", e));
+  fetch(`/api/tasks/${taskId}`, { method: "DELETE", headers: getAuthHeaders() }).catch((e) => console.error("API delete task error:", e));
 }
 
 function apiPatchBoard(boardId: string, data: Record<string, unknown>) {
   fetch(`/api/boards/${boardId}`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: getAuthHeaders(),
     body: JSON.stringify(data),
   }).catch((e) => console.error("API patch board error:", e));
 }
 
 function apiDeleteBoard(boardId: string) {
-  fetch(`/api/boards/${boardId}`, { method: "DELETE" }).catch((e) => console.error("API delete board error:", e));
+  fetch(`/api/boards/${boardId}`, { method: "DELETE", headers: getAuthHeaders() }).catch((e) => console.error("API delete board error:", e));
 }
 
 // ── Transform Prisma API data to frontend types ──
@@ -328,9 +335,10 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
   loadFromServer: async (workspaceId: string) => {
     try {
       // 1. Fetch boards + workspace members in parallel
+      const authH = { headers: getAuthHeaders() };
       const [boardsRes, wsRes] = await Promise.all([
-        fetch(`/api/boards?workspaceId=${workspaceId}`),
-        fetch(`/api/workspace?workspaceId=${workspaceId}`),
+        fetch(`/api/boards?workspaceId=${workspaceId}`, authH),
+        fetch(`/api/workspace?workspaceId=${workspaceId}`, authH),
       ]);
       if (!boardsRes.ok) {
         console.error("Failed to load boards:", boardsRes.status, await boardsRes.text().catch(() => ""));
@@ -354,7 +362,7 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
       // 3. Fetch tasks for each board in parallel
       const taskResults = await Promise.all(
         apiBoards.map((b: { id: string }) =>
-          fetch(`/api/tasks?boardId=${b.id}`).then((r) => r.ok ? r.json() : [])
+          fetch(`/api/tasks?boardId=${b.id}`, { headers: getAuthHeaders() }).then((r) => r.ok ? r.json() : [])
         )
       );
 
@@ -389,13 +397,13 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
   // ── Refresh without resetting UI state ──
   refreshFromServer: async (workspaceId: string) => {
     try {
-      const boardsRes = await fetch(`/api/boards?workspaceId=${workspaceId}`);
+      const boardsRes = await fetch(`/api/boards?workspaceId=${workspaceId}`, { headers: getAuthHeaders() });
       if (!boardsRes.ok) return;
       const apiBoards = await boardsRes.json();
 
       const taskResults = await Promise.all(
         apiBoards.map((b: { id: string }) =>
-          fetch(`/api/tasks?boardId=${b.id}`).then((r) => r.ok ? r.json() : [])
+          fetch(`/api/tasks?boardId=${b.id}`, { headers: getAuthHeaders() }).then((r) => r.ok ? r.json() : [])
         )
       );
 
@@ -450,24 +458,38 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
       undoStack: [...s.undoStack, { action: "moveTask", data: { taskId, fromStatus: oldStatus, toStatus: newStatus } }].slice(-30),
       redoStack: [],
     }));
-    // Persist to server
-    apiPatchTask(taskId, { status: newStatus });
+    // Persist to server (status + activity)
+    const userId = getCurrentUserId();
+    apiPatchTask(taskId, {
+      status: newStatus,
+      _addActivity: {
+        action: `movió de "${statusLabels[oldStatus]}" a "${statusLabels[newStatus]}"`,
+        field: "status",
+        oldValue: statusLabels[oldStatus],
+        newValue: statusLabels[newStatus],
+        userId,
+      },
+    });
   },
 
   updateTaskWithActivity: (taskId, updates, authorId = getCurrentUserId()) => {
-    set((state) => {
-      const task = state.tasks.find((t) => t.id === taskId);
-      if (!task) return state;
-      const allMembers = [...TEAM_MEMBERS, ...state.customTeamMembers];
-      const newEntries = buildActivityEntries(task, updates, authorId, allMembers);
-      return { tasks: state.tasks.map((t) => t.id === taskId ? { ...t, ...updates, activity: [...t.activity, ...newEntries] } : t) };
-    });
-    // Persist relevant fields to server
+    const state = get();
+    const task = state.tasks.find((t) => t.id === taskId);
+    if (!task) return;
+    const allMembers = state.serverTeamMembers.length > 0 ? [...state.serverTeamMembers, ...state.customTeamMembers] : [...TEAM_MEMBERS, ...state.customTeamMembers];
+    const newEntries = buildActivityEntries(task, updates, authorId, allMembers);
+    set((s) => ({ tasks: s.tasks.map((t) => t.id === taskId ? { ...t, ...updates, activity: [...t.activity, ...newEntries] } : t) }));
+    // Persist relevant fields + activity to server
     const serverUpdates: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(updates)) {
       if (["activity", "comments", "attachments", "urls", "subtasks"].includes(key)) continue;
       if (key === "dueDate" && value) serverUpdates.dueDate = value;
       else serverUpdates[key] = value;
+    }
+    // Send first activity entry to server
+    if (newEntries.length > 0) {
+      const entry = newEntries[0];
+      serverUpdates._addActivity = { action: entry.action, field: entry.field, oldValue: entry.oldValue, newValue: entry.newValue, userId: authorId };
     }
     if (Object.keys(serverUpdates).length > 0) {
       apiPatchTask(taskId, serverUpdates);
@@ -499,7 +521,7 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     const boardId = state.activeBoardId;
     fetch("/api/tasks", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: getAuthHeaders(),
       body: JSON.stringify({
         boardId,
         title: task.title,
@@ -542,7 +564,7 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     const state = get();
     fetch("/api/tasks", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: getAuthHeaders(),
       body: JSON.stringify({
         boardId: state.activeBoardId,
         title,
@@ -574,7 +596,7 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     if (workspaceId) {
       fetch("/api/boards", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ name, workspaceId }),
       }).then((r) => r.json()).then((saved) => {
         const serverBoard = transformApiBoard(saved, []);
@@ -626,7 +648,7 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     if (workspaceId) {
       fetch("/api/boards", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ name: `${board.name} (copia)`, workspaceId }),
       }).then((r) => r.json()).then((savedBoard) => {
         set((s) => ({
@@ -637,7 +659,7 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
         for (const nt of newTasks) {
           fetch("/api/tasks", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: getAuthHeaders(),
             body: JSON.stringify({ boardId: savedBoard.id, title: nt.title, status: nt.status, priority: nt.priority, store: nt.store || undefined, assigneeId: nt.assigneeId || undefined }),
           }).catch((e) => console.error("API duplicate board task error:", e));
         }
@@ -645,8 +667,16 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     }
   },
 
-  removeAttachment: (taskId, index) =>
-    set((state) => ({ tasks: state.tasks.map((t) => t.id === taskId ? { ...t, attachments: t.attachments.filter((_, i) => i !== index) } : t) })),
+  removeAttachment: (taskId, index) => {
+    const state = get();
+    const task = state.tasks.find((t) => t.id === taskId);
+    const att = task?.attachments[index];
+    set((s) => ({ tasks: s.tasks.map((t) => t.id === taskId ? { ...t, attachments: t.attachments.filter((_, i) => i !== index) } : t) }));
+    // Delete from server if it has an id
+    if (att?.id) {
+      fetch(`/api/attachments?id=${att.id}`, { method: "DELETE" }).catch((e) => console.error("API delete attachment error:", e));
+    }
+  },
 
   reorderBoardTasks: (taskIds) =>
     set((state) => ({
@@ -658,39 +688,79 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
       boards: boardIds.map((id) => state.boards.find((b) => b.id === id)!).filter(Boolean),
     })),
 
-  addColumn: (title, afterColumnId, beforeColumnId) => set((s) => {
+  addColumn: (title, afterColumnId, beforeColumnId) => {
+    const s = get();
     const board = s.boards.find((b) => b.id === s.activeBoardId);
-    if (!board) return s;
-    const newCol = { id: `col_${Date.now()}`, title };
+    if (!board) return;
+    const newColId = `col_${Date.now()}`;
+    const newCol = { id: newColId, title };
     const cols = [...board.columns];
+    let position = cols.length;
     if (beforeColumnId) {
       const idx = cols.findIndex((c) => c.id === beforeColumnId);
       cols.splice(Math.max(0, idx), 0, newCol);
+      position = Math.max(0, idx);
     } else if (afterColumnId) {
       const idx = cols.findIndex((c) => c.id === afterColumnId);
       cols.splice(idx + 1, 0, newCol);
+      position = idx + 1;
     } else {
       cols.push(newCol);
     }
-    return { boards: s.boards.map((b) => b.id === s.activeBoardId ? { ...b, columns: cols } : b) };
-  }),
+    set((st) => ({ boards: st.boards.map((b) => b.id === st.activeBoardId ? { ...b, columns: cols } : b) }));
+    // Persist to server
+    fetch("/api/columns", {
+      method: "POST",
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ boardId: s.activeBoardId, name: title, position }),
+    }).then((r) => r.json()).then((saved) => {
+      set((st) => ({
+        boards: st.boards.map((b) => b.id === st.activeBoardId
+          ? { ...b, columns: b.columns.map((c) => c.id === newColId ? { ...c, id: columnNameToStatusId(saved.name) } : c) }
+          : b),
+      }));
+    }).catch((e) => console.error("API add column error:", e));
+  },
 
-  removeColumn: (columnId) => set((s) => {
+  removeColumn: (columnId) => {
+    const s = get();
     const board = s.boards.find((b) => b.id === s.activeBoardId);
-    if (!board) return s;
-    return {
-      boards: s.boards.map((b) => b.id === s.activeBoardId ? { ...b, columns: b.columns.filter((c) => c.id !== columnId) } : b),
-      tasks: s.tasks.map((t) => board.taskIds.includes(t.id) && t.status === columnId as Status ? { ...t, status: "por_hacer" as Status } : t),
-    };
-  }),
+    if (!board) return;
+    set((st) => ({
+      boards: st.boards.map((b) => b.id === st.activeBoardId ? { ...b, columns: b.columns.filter((c) => c.id !== columnId) } : b),
+      tasks: st.tasks.map((t) => board.taskIds.includes(t.id) && t.status === columnId as Status ? { ...t, status: "por_hacer" as Status } : t),
+    }));
+    // Find the real server column ID — we need to search by name
+    const col = board.columns.find((c) => c.id === columnId);
+    if (col) {
+      // Column IDs in frontend are status strings, so we need to find by board + name
+      fetch(`/api/columns?id=${columnId}`, { method: "DELETE" }).catch(() => {
+        // If status-based ID fails, the column was a server column — try by board refresh
+      });
+    }
+  },
 
-  renameColumn: (columnId, title) => set((s) => ({
-    boards: s.boards.map((b) => b.id === s.activeBoardId ? { ...b, columns: b.columns.map((c) => c.id === columnId ? { ...c, title } : c) } : b),
-  })),
+  renameColumn: (columnId, title) => {
+    set((s) => ({
+      boards: s.boards.map((b) => b.id === s.activeBoardId ? { ...b, columns: b.columns.map((c) => c.id === columnId ? { ...c, title } : c) } : b),
+    }));
+    fetch("/api/columns", {
+      method: "PATCH",
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ id: columnId, name: title }),
+    }).catch((e) => console.error("API rename column error:", e));
+  },
 
-  setColumnColor: (columnId, color) => set((s) => ({
-    boards: s.boards.map((b) => b.id === s.activeBoardId ? { ...b, columns: b.columns.map((c) => c.id === columnId ? { ...c, color } : c) } : b),
-  })),
+  setColumnColor: (columnId, color) => {
+    set((s) => ({
+      boards: s.boards.map((b) => b.id === s.activeBoardId ? { ...b, columns: b.columns.map((c) => c.id === columnId ? { ...c, color } : c) } : b),
+    }));
+    fetch("/api/columns", {
+      method: "PATCH",
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ id: columnId, color }),
+    }).catch((e) => console.error("API set column color error:", e));
+  },
 
   addCustomStore: (store) => set((s) => ({ customStores: s.customStores.includes(store) ? s.customStores : [...s.customStores, store] })),
   removeCustomStore: (store) => set((s) => ({ customStores: s.customStores.filter((x) => x !== store) })),
@@ -712,7 +782,7 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     // Persist to server
     fetch("/api/tasks", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: getAuthHeaders(),
       body: JSON.stringify({
         boardId: state.activeBoardId,
         title: newTask.title,
@@ -858,7 +928,7 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     for (const nt of newTasks) {
       fetch("/api/tasks", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ boardId: state.activeBoardId, title: nt.title, status: nt.status, priority: nt.priority, store: nt.store || undefined, assigneeId: nt.assigneeId || undefined }),
       }).then((r) => r.json()).then((saved) => {
         set((s) => ({
@@ -940,13 +1010,15 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
         const ss = useSidebarStore.getState();
         useSidebarStore.setState({ trash: ss.trash.filter((t: { id: string }) => t.id !== task.id) });
       } catch { /* ignore */ }
-      // Restore task
+      // Restore task locally
       set({
         tasks: [...state.tasks, task],
         boards: state.boards.map((b) => b.id === boardId ? { ...b, taskIds: [...b.taskIds, task.id] } : b),
         undoStack: newUndoStack,
         redoStack: [...state.redoStack, lastAction],
       });
+      // Restore on server (clear soft-delete)
+      apiPatchTask(task.id, { deletedAt: null });
       return;
     }
 
@@ -1061,7 +1133,7 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     // Persist to server
     fetch("/api/tasks", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: getAuthHeaders(),
       body: JSON.stringify({
         boardId: s.activeBoardId,
         title: newTask.title,

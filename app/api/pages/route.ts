@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getAuthUser } from "@/lib/auth";
 
 export async function GET(request: Request) {
   try {
+    const { error } = await getAuthUser(request);
+    if (error) return error;
     const { searchParams } = new URL(request.url);
     const workspaceId = searchParams.get("workspaceId");
     if (!workspaceId) return NextResponse.json({ error: "workspaceId requerido" }, { status: 400 });
@@ -22,6 +25,8 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    const { error } = await getAuthUser(request);
+    if (error) return error;
     const { title, emoji, workspaceId, parentId, isPrivate } = await request.json();
     if (!workspaceId) return NextResponse.json({ error: "workspaceId requerido" }, { status: 400 });
 

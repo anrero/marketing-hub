@@ -25,6 +25,17 @@ interface ChatState {
   getUnreadCountForChannel: (channelType: "general" | "board" | "direct", channelId: string, userId: string) => number;
 }
 
+function getChatAuthHeaders(contentType = true): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (contentType) headers["Content-Type"] = "application/json";
+  try {
+    const authData = JSON.parse(localStorage.getItem("mh-auth-storage") || "{}");
+    const userId = authData?.state?.currentUser?.id;
+    if (userId) headers["x-user-id"] = userId;
+  } catch { /* ignore */ }
+  return headers;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function transformApiMessage(msg: any): ChatMessage {
   return {
@@ -49,7 +60,8 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     try {
       const params = new URLSearchParams({ channelType, channelId });
       if (userId) params.set("userId", userId);
-      const res = await fetch(`/api/chat?${params}`);
+      const authH = getChatAuthHeaders(false);
+      const res = await fetch(`/api/chat?${params}`, { headers: authH });
       if (!res.ok) return;
       const apiMessages = await res.json();
       const newMessages = apiMessages.map(transformApiMessage);
@@ -79,7 +91,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     // Persist to server
     fetch("/api/chat", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: getChatAuthHeaders(),
       body: JSON.stringify({ text, channelType, channelId, senderId }),
     }).then((r) => r.json()).then((saved) => {
       const serverMsg = transformApiMessage(saved);
@@ -112,7 +124,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     // Persist to server
     fetch("/api/chat/read", {
       method: "PATCH",
-      headers: { "Content-Type": "application/json" },
+      headers: getChatAuthHeaders(),
       body: JSON.stringify({ channelType, channelId, userId }),
     }).catch((e) => console.error("API mark read error:", e));
   },

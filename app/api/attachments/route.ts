@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import cloudinary, { isCloudinaryConfigured } from "@/lib/cloudinary";
+import { getAuthUser } from "@/lib/auth";
 
 export async function GET(req: Request) {
   try {
+    const { error } = await getAuthUser(req);
+    if (error) return error;
     const { searchParams } = new URL(req.url);
     const taskId = searchParams.get("taskId");
     if (!taskId) return NextResponse.json({ error: "taskId requerido" }, { status: 400 });
@@ -22,6 +25,8 @@ export async function GET(req: Request) {
 
 export async function DELETE(req: Request) {
   try {
+    const { error } = await getAuthUser(req);
+    if (error) return error;
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
     if (!id) return NextResponse.json({ error: "id requerido" }, { status: 400 });

@@ -124,6 +124,12 @@ export const useAuthStore = create<AuthState>()(persist((set, get) => ({
     const state = get();
     if (!state.currentUser) return;
     set({ currentUser: { ...state.currentUser, ...updates } });
+    // Persist to server
+    fetch("/api/users", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", "x-user-id": state.currentUser.id },
+      body: JSON.stringify(updates),
+    }).catch((e) => console.error("API update profile error:", e));
   },
 }), {
   name: "mh-auth-storage",

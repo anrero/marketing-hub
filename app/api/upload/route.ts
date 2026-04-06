@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
 import cloudinary, { isCloudinaryConfigured } from "@/lib/cloudinary";
 import { prisma } from "@/lib/prisma";
+import { getAuthUser } from "@/lib/auth";
 
 export async function POST(req: Request) {
   try {
+    const { error } = await getAuthUser(req);
+    if (error) return error;
     if (!isCloudinaryConfigured()) {
       return NextResponse.json(
         { error: "Cloudinary no está configurado. Agrega CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY y CLOUDINARY_API_SECRET en las variables de entorno." },

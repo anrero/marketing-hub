@@ -155,16 +155,27 @@ function transformApiPage(apiPage: any): PageNode {
 
 // ── API helpers ──
 
+function getSidebarAuthHeaders(contentType = true): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (contentType) headers["Content-Type"] = "application/json";
+  try {
+    const authData = JSON.parse(localStorage.getItem("mh-auth-storage") || "{}");
+    const userId = authData?.state?.currentUser?.id;
+    if (userId) headers["x-user-id"] = userId;
+  } catch { /* ignore */ }
+  return headers;
+}
+
 function apiUpdatePage(pageId: string, data: Record<string, unknown>) {
   fetch(`/api/pages/${pageId}`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: getSidebarAuthHeaders(),
     body: JSON.stringify(data),
   }).catch((e) => console.error("API update page error:", e));
 }
 
 function apiDeletePage(pageId: string) {
-  fetch(`/api/pages/${pageId}`, { method: "DELETE" }).catch((e) => console.error("API delete page error:", e));
+  fetch(`/api/pages/${pageId}`, { method: "DELETE", headers: getSidebarAuthHeaders(false) }).catch((e) => console.error("API delete page error:", e));
 }
 
 export const useSidebarStore = create<SidebarState>()(persist((set, get) => ({
@@ -184,7 +195,7 @@ export const useSidebarStore = create<SidebarState>()(persist((set, get) => ({
   // ── Load pages from server ──
   loadPagesFromServer: async (workspaceId: string) => {
     try {
-      const res = await fetch(`/api/pages?workspaceId=${workspaceId}`);
+      const res = await fetch(`/api/pages?workspaceId=${workspaceId}`, { headers: getSidebarAuthHeaders(false) });
       if (!res.ok) return;
       const apiPages = await res.json();
       const pages = apiPages.map(transformApiPage);
@@ -197,7 +208,7 @@ export const useSidebarStore = create<SidebarState>()(persist((set, get) => ({
   // ── Load workspace info from server ──
   loadWorkspacesFromServer: async (workspaceId: string) => {
     try {
-      const res = await fetch(`/api/workspace?workspaceId=${workspaceId}`);
+      const res = await fetch(`/api/workspace?workspaceId=${workspaceId}`, { headers: getSidebarAuthHeaders(false) });
       if (!res.ok) return;
       const ws = await res.json();
       set({
@@ -249,7 +260,7 @@ export const useSidebarStore = create<SidebarState>()(persist((set, get) => ({
     if (workspaceId) {
       fetch("/api/pages", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getSidebarAuthHeaders(),
         body: JSON.stringify({ workspaceId, parentId, isPrivate }),
       }).then((r) => r.json()).then((saved) => {
         const serverPage = transformApiPage(saved);
@@ -382,6 +393,38 @@ export const useSidebarStore = create<SidebarState>()(persist((set, get) => ({
     const originalIndex = updatedPages.findIndex((p) => p.id === id);
     const result = [...updatedPages];
     result.splice(originalIndex + 1, 0, ...newPages);
+
+    // ── Persist to server ──
+    const authData = JSON.parse(localStorage.getItem("mh-auth-storage") || "{}");
+    const workspaceId = authData?.state?.currentUser?.workspaceId;
+    if (workspaceId) {
+      for (const np of newPages) {
+        fetch("/api/pages", {
+          method: "POST",
+          headers: getSidebarAuthHeaders(),
+          body: JSON.stringify({ title: np.title, emoji: np.emoji, workspaceId, parentId: np.parentId, isPrivate: np.isPrivate }),
+        }).then((r) => r.json()).then((saved) => {
+          // Update blocks on server
+          if (np.blocks.length > 0) {
+            apiUpdatePage(saved.id, {
+              blocks: np.blocks.map((blk) => ({
+                type: blk.type, content: blk.content,
+                properties: {
+                  ...(blk.checked !== undefined && { checked: blk.checked }),
+                  ...(blk.emoji && { emoji: blk.emoji }),
+                  ...(blk.color && { color: blk.color }),
+                },
+              })),
+            });
+          }
+          // Replace temp ID with server ID
+          set((st) => ({
+            pages: st.pages.map((p) => p.id === np.id ? { ...p, id: saved.id } : p),
+            activePageId: st.activePageId === np.id ? saved.id : st.activePageId,
+          }));
+        }).catch((e) => console.error("API duplicate page error:", e));
+      }
+    }
 
     return { pages: result };
   }),
@@ -531,7 +574,7 @@ export const useSidebarStore = create<SidebarState>()(persist((set, get) => ({
     if (workspaceId) {
       fetch("/api/pages", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getSidebarAuthHeaders(),
         body: JSON.stringify({ title: tmpl.name, emoji: tmpl.emoji, workspaceId, parentId, isPrivate }),
       }).then((r) => r.json()).then((saved) => {
         // Update page blocks on server

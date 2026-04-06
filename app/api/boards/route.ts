@@ -1,11 +1,20 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getAuthUser } from "@/lib/auth";
 
 export async function GET(request: Request) {
   try {
+    const { user, error } = await getAuthUser(request);
+    if (error) return error;
+
     const { searchParams } = new URL(request.url);
     const workspaceId = searchParams.get("workspaceId");
     if (!workspaceId) return NextResponse.json({ error: "workspaceId requerido" }, { status: 400 });
+
+    // Verify user belongs to this workspace
+    if (user!.workspaceId !== workspaceId) {
+      return NextResponse.json({ error: "Sin acceso a este workspace" }, { status: 403 });
+    }
 
     const boards = await prisma.board.findMany({
       where: { workspaceId },
@@ -22,8 +31,15 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    const { user, error } = await getAuthUser(request);
+    if (error) return error;
+
     const { name, emoji, workspaceId } = await request.json();
     if (!name || !workspaceId) return NextResponse.json({ error: "name y workspaceId requeridos" }, { status: 400 });
+
+    if (user!.workspaceId !== workspaceId) {
+      return NextResponse.json({ error: "Sin acceso a este workspace" }, { status: 403 });
+    }
 
     const count = await prisma.board.count({ where: { workspaceId } });
 

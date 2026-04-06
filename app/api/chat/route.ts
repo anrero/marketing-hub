@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getAuthUser } from "@/lib/auth";
 
 export async function GET(request: Request) {
   try {
+    const { error } = await getAuthUser(request);
+    if (error) return error;
     const { searchParams } = new URL(request.url);
     const channelType = searchParams.get("channelType");
     const channelId = searchParams.get("channelId");
@@ -40,6 +43,8 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    const { error } = await getAuthUser(request);
+    if (error) return error;
     const { text, channelType, channelId, senderId } = await request.json();
     if (!text || !channelType || !channelId || !senderId) {
       return NextResponse.json({ error: "Campos requeridos: text, channelType, channelId, senderId" }, { status: 400 });
