@@ -46,7 +46,8 @@ export interface Task {
   campaignName: string;
   adAccount: string;
   dueDate: string;
-  urls: string[];
+  description?: string;
+  urls: { id: string; url: string }[];
   attachments: { id?: string; name: string; size: string; type?: string; url?: string }[];
   comments: Comment[];
   activity: ActivityEntry[];

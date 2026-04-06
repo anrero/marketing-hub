@@ -81,8 +81,8 @@ function exportTaskMarkdown(task: ReturnType<typeof useBoardStore.getState>["tas
   const assignee = allMembers.find((m) => m.id === task.assigneeId)?.name ?? "Sin asignar";
   const statusLabel = COLUMNS.find((c) => c.id === task.status)?.title ?? task.status;
   const subs = (task.subtasks ?? []).map((s) => `- [${s.completed ? "x" : " "}] ${s.title}`).join("\n");
-  const urls = task.urls.map((u) => `- ${u}`).join("\n");
-  const desc = task.customFields?.description?.replace(/<[^>]*>/g, "") ?? "";
+  const urls = task.urls.map((u) => `- ${u.url}`).join("\n");
+  const desc = task.description?.replace(/<[^>]*>/g, "") ?? "";
   const md = `# ${task.title.replace(/<[^>]*>/g, "")}
 
 | Propiedad | Valor |
@@ -110,6 +110,7 @@ export function TaskDetail() {
     removeAttachment, getAllStores, getAllCampaignTypes, getAllTeamMembers,
     addSubtask, toggleSubtask, removeSubtask, reorderSubtasks, setReminder,
     getAllTags, archiveTask, unarchiveTask, duplicateTask, deleteTask,
+    addTaskUrl, removeTaskUrl,
   } = useBoardStore();
 
   const { toggleFavorite, isFavorite } = useSidebarStore();
@@ -125,8 +126,10 @@ export function TaskDetail() {
   const subtaskInputRef = useRef<HTMLInputElement>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const descRef = useRef<HTMLDivElement>(null);
+  const taskRef = useRef<typeof tasks[0] | undefined>(undefined);
 
   const task = tasks.find((t) => t.id === selectedTaskId);
+  taskRef.current = task;
 
   const [uploading, setUploading] = useState(false);
   const onDrop = useCallback(
@@ -186,9 +189,31 @@ export function TaskDetail() {
   // Sync description
   useEffect(() => {
     if (descRef.current && task) {
-      descRef.current.innerHTML = task.customFields?.description ?? "";
+      descRef.current.innerHTML = task.description ?? "";
     }
   }, [selectedTaskId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Debounced auto-save for description (1 second)
+  const descTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoSaveDescription = useCallback(() => {
+    if (descTimerRef.current) clearTimeout(descTimerRef.current);
+    descTimerRef.current = setTimeout(() => {
+      const currentTask = taskRef.current;
+      if (!descRef.current) { console.log("[DESC SAVE] debounce: descRef is null, SKIPPED"); return; }
+      const html = descRef.current.innerHTML;
+      if (currentTask && html !== (currentTask.description ?? "")) {
+        console.log("[DESC SAVE] debounce fired. taskId:", currentTask.id, "html:", html.substring(0, 80));
+        updateTask(currentTask.id, { description: html });
+      }
+    }, 1000);
+  }, [updateTask]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Cleanup debounce timer on unmount
+  useEffect(() => {
+    return () => {
+      if (descTimerRef.current) clearTimeout(descTimerRef.current);
+    };
+  }, []);
 
   const dndSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
@@ -196,8 +221,8 @@ export function TaskDetail() {
 
   const isFav = isFavorite("page", `task_${task.id}`);
 
-  const addUrl = () => { if (!newUrl.trim()) return; updateTask(task.id, { urls: [...task.urls, newUrl.trim()] }); setNewUrl(""); };
-  const removeUrl = (index: number) => { updateTask(task.id, { urls: task.urls.filter((_, i) => i !== index) }); };
+  const addUrl = () => { if (!newUrl.trim()) return; addTaskUrl(task.id, newUrl.trim()); setNewUrl(""); };
+  const removeUrl = (urlId: string) => { removeTaskUrl(task.id, urlId); };
   const addComment = () => {
     if (!newComment.trim()) return;
     updateTask(task.id, { comments: [...task.comments, { id: `c${Date.now()}`, authorId: "u1", content: newComment.trim(), createdAt: new Date().toISOString() }] });
@@ -212,9 +237,13 @@ export function TaskDetail() {
     toast.success("Subtarea agregada");
   };
   const saveDescription = () => {
-    if (!descRef.current) return;
+    if (!descRef.current || !task) return;
     const html = descRef.current.innerHTML;
-    updateTask(task.id, { customFields: { ...task.customFields, description: html } });
+    if (descTimerRef.current) clearTimeout(descTimerRef.current);
+    if (html !== (task.description ?? "")) {
+      console.log("[DESC SAVE] onBlur fired. taskId:", task.id, "html:", html.substring(0, 80));
+      updateTask(task.id, { description: html });
+    }
   };
 
   const subtasks = task.subtasks ?? [];
@@ -224,7 +253,18 @@ export function TaskDetail() {
 
   return (
     <Sheet open={!!selectedTaskId} onOpenChange={() => {
-      // Auto-save: blur active element to trigger onBlur saves before closing
+      // Force-save description before closing (don't rely on blur/debounce)
+      if (descRef.current && task) {
+        if (descTimerRef.current) clearTimeout(descTimerRef.current);
+        const html = descRef.current.innerHTML;
+        console.log("[DESC SAVE] onClose. html:", html.substring(0, 80), "| stored:", (task.description ?? "").substring(0, 80));
+        if (html !== (task.description ?? "")) {
+          console.log("[DESC SAVE] onClose SAVING to server");
+          updateTask(task.id, { description: html });
+        } else {
+          console.log("[DESC SAVE] onClose SKIPPED (no change)");
+        }
+      }
       if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
       setTimeout(() => setSelectedTask(null), 0);
     }}>
@@ -539,6 +579,7 @@ export function TaskDetail() {
                 className="min-h-[80px] text-sm leading-relaxed outline-none rounded-lg border border-transparent hover:border-border/50 focus:border-border px-3 py-2 transition-colors empty:before:content-[attr(data-placeholder)] empty:before:text-muted-foreground/40 empty:before:pointer-events-none"
                 data-placeholder="Escribe una descripción, usa Ctrl+B para negrita..."
                 onBlur={saveDescription}
+                onInput={autoSaveDescription}
                 onKeyDown={(e) => {
                   if (e.key === "b" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); document.execCommand("bold"); }
                   if (e.key === "i" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); document.execCommand("italic"); }
@@ -656,12 +697,12 @@ export function TaskDetail() {
                 <Link2 className="h-3.5 w-3.5" />URLs
               </h3>
               <div className="space-y-1.5">
-                {task.urls.map((url, i) => (
-                  <div key={i} className="flex items-center gap-2 rounded-lg bg-muted/40 px-3 py-1.5 group">
-                    <a href={url} target="_blank" rel="noopener noreferrer" className="flex flex-1 items-center gap-1.5 truncate text-xs text-blue-500 hover:text-blue-400 hover:underline" onClick={(e) => e.stopPropagation()}>
-                      <ExternalLink className="h-3 w-3 shrink-0" />{url}
+                {task.urls.map((u) => (
+                  <div key={u.id} className="flex items-center gap-2 rounded-lg bg-muted/40 px-3 py-1.5 group">
+                    <a href={u.url} target="_blank" rel="noopener noreferrer" className="flex flex-1 items-center gap-1.5 truncate text-xs text-blue-500 hover:text-blue-400 hover:underline" onClick={(e) => e.stopPropagation()}>
+                      <ExternalLink className="h-3 w-3 shrink-0" />{u.url}
                     </a>
-                    <button onClick={() => removeUrl(i)} className="opacity-0 group-hover:opacity-100 rounded p-0.5 hover:bg-destructive/20 hover:text-destructive transition-all">
+                    <button onClick={() => removeUrl(u.id)} className="opacity-0 group-hover:opacity-100 rounded p-0.5 hover:bg-destructive/20 hover:text-destructive transition-all">
                       <Trash2 className="h-3 w-3" />
                     </button>
                   </div>

@@ -78,7 +78,7 @@ export const TASKS: Task[] = [
     campaignName: "MedSock_Conv_Calcetines_Mar26",
     adAccount: "Act_MedSock_001",
     dueDate: "2026-04-02",
-    urls: ["https://medsock.com/calcetines-diabeticos"],
+    urls: [{ id: "url_1", url: "https://medsock.com/calcetines-diabeticos" }],
     attachments: [
       { name: "brief_medsock.pdf", size: "2.4 MB" },
       { name: "referencias_visual.zip", size: "15 MB" },
@@ -112,8 +112,8 @@ export const TASKS: Task[] = [
     adAccount: "Act_Tendearte_001",
     dueDate: "2026-04-05",
     urls: [
-      "https://tendearte.com/primavera",
-      "https://canva.com/design/tendearte-spring",
+      { id: "url_2", url: "https://tendearte.com/primavera" },
+      { id: "url_3", url: "https://canva.com/design/tendearte-spring" },
     ],
     attachments: [{ name: "moodboard.png", size: "4.1 MB" }],
     comments: [],
@@ -137,7 +137,7 @@ export const TASKS: Task[] = [
     campaignName: "FloraCare_LAL_ATC_Suculentas",
     adAccount: "Act_FloraCare_001",
     dueDate: "2026-03-31",
-    urls: ["https://business.facebook.com/adsmanager"],
+    urls: [{ id: "url_4", url: "https://business.facebook.com/adsmanager" }],
     attachments: [],
     comments: [
       {
@@ -174,8 +174,8 @@ export const TASKS: Task[] = [
     adAccount: "Act_WildropShop_001",
     dueDate: "2026-03-30",
     urls: [
-      "https://docs.google.com/document/d/wildropshop-copies",
-      "https://wildropshop.com/checkout",
+      { id: "url_5", url: "https://docs.google.com/document/d/wildropshop-copies" },
+      { id: "url_6", url: "https://wildropshop.com/checkout" },
     ],
     attachments: [{ name: "copies_v1.docx", size: "340 KB" }],
     comments: [
@@ -218,7 +218,7 @@ export const TASKS: Task[] = [
     campaignName: "Rojucol_TOF_Joyeria_Feb26",
     adAccount: "Act_Rojucol_001",
     dueDate: "2026-04-01",
-    urls: ["https://business.facebook.com/adsmanager/reports"],
+    urls: [{ id: "url_7", url: "https://business.facebook.com/adsmanager/reports" }],
     attachments: [
       { name: "reporte_febrero.xlsx", size: "1.8 MB" },
       { name: "dashboard_screenshot.png", size: "890 KB" },
@@ -258,8 +258,8 @@ export const TASKS: Task[] = [
     adAccount: "Act_Monklic_001",
     dueDate: "2026-03-31",
     urls: [
-      "https://drive.google.com/drive/monklic-videos",
-      "https://monklic.com/accesorios-tech",
+      { id: "url_8", url: "https://drive.google.com/drive/monklic-videos" },
+      { id: "url_9", url: "https://monklic.com/accesorios-tech" },
     ],
     attachments: [
       { name: "video_hook_v1.mp4", size: "28 MB" },
@@ -306,7 +306,7 @@ export const TASKS: Task[] = [
     campaignName: "FloraCare_BOF_Kits_Feb26",
     adAccount: "Act_FloraCare_001",
     dueDate: "2026-03-25",
-    urls: ["https://floracare.com/kits-regalo"],
+    urls: [{ id: "url_10", url: "https://floracare.com/kits-regalo" }],
     attachments: [
       { name: "reporte_final.pdf", size: "3.2 MB" },
     ],
@@ -345,8 +345,8 @@ export const TASKS: Task[] = [
     adAccount: "Act_Tendearte_001",
     dueDate: "2026-03-28",
     urls: [
-      "https://tendearte.com/dia-de-la-madre",
-      "https://figma.com/tendearte-landing",
+      { id: "url_11", url: "https://tendearte.com/dia-de-la-madre" },
+      { id: "url_12", url: "https://figma.com/tendearte-landing" },
     ],
     attachments: [
       { name: "landing_final.fig", size: "12 MB" },
@@ -379,7 +379,7 @@ export const TASKS: Task[] = [
     campaignName: "MedSock_Setup_Pixel_Mar26",
     adAccount: "Act_MedSock_001",
     dueDate: "2026-04-01",
-    urls: ["https://business.facebook.com/events_manager"],
+    urls: [{ id: "url_13", url: "https://business.facebook.com/events_manager" }],
     attachments: [],
     comments: [
       {
@@ -409,7 +409,7 @@ export const TASKS: Task[] = [
     campaignName: "Rojucol_RMK_PubCaliente_Mar26",
     adAccount: "Act_Rojucol_001",
     dueDate: "2026-04-03",
-    urls: ["https://business.facebook.com/adsmanager"],
+    urls: [{ id: "url_14", url: "https://business.facebook.com/adsmanager" }],
     attachments: [{ name: "audiencias_calientes.csv", size: "120 KB" }],
     comments: [],
     activity: [

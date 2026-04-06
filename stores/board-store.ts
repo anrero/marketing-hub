@@ -93,6 +93,9 @@ interface BoardState {
   updateTeamMember: (memberId: string, updates: Partial<TeamMember>) => void;
   duplicateTask: (taskId: string) => void;
   deleteTask: (taskId: string) => void;
+  // URL actions
+  addTaskUrl: (taskId: string, url: string) => void;
+  removeTaskUrl: (taskId: string, urlId: string) => void;
   // Subtask actions
   addSubtask: (taskId: string, title: string) => void;
   toggleSubtask: (taskId: string, subtaskId: string) => void;
@@ -202,11 +205,24 @@ function getAuthHeaders(): Record<string, string> {
 }
 
 function apiPatchTask(taskId: string, data: Record<string, unknown>) {
-  fetch(`/api/tasks/${taskId}`, {
+  const hasDesc = "description" in data;
+  if (hasDesc) console.log("[API PATCH] sending description for task", taskId, ":", String(data.description).substring(0, 80));
+  return fetch(`/api/tasks/${taskId}`, {
     method: "PATCH",
     headers: getAuthHeaders(),
     body: JSON.stringify(data),
-  }).catch((e) => console.error("API patch task error:", e));
+  }).then(async (res) => {
+    if (hasDesc) console.log("[API PATCH] response status:", res.status);
+    if (!res.ok) {
+      const t = await res.text().catch(() => "unknown error");
+      console.error("[API PATCH] FAILED:", res.status, t);
+      return { ok: false, status: res.status, error: t };
+    }
+    return { ok: true, status: res.status };
+  }).catch((e) => {
+    console.error("[API PATCH] network error:", e);
+    return { ok: false, status: 0, error: String(e) };
+  });
 }
 
 function apiDeleteTask(taskId: string) {
@@ -240,7 +256,8 @@ function transformApiTask(apiTask: any): Task {
     campaignName: apiTask.campaignName || "",
     adAccount: apiTask.adAccount || "",
     dueDate: apiTask.dueDate ? new Date(apiTask.dueDate).toISOString().split("T")[0] : "",
-    urls: (apiTask.urls || []).map((u: { url: string }) => u.url),
+    description: apiTask.description ?? "",
+    urls: (apiTask.urls || []).map((u: { id: string; url: string }) => ({ id: u.id, url: u.url })),
     attachments: (apiTask.attachments || []).map((a: { id: string; name: string; size: number; type?: string; url?: string }) => ({
       id: a.id,
       name: a.name,
@@ -506,7 +523,15 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
       else serverUpdates[key] = value;
     }
     if (Object.keys(serverUpdates).length > 0) {
-      apiPatchTask(taskId, serverUpdates);
+      apiPatchTask(taskId, serverUpdates).then((result) => {
+        if ("description" in serverUpdates) {
+          if (result?.ok) {
+            console.log("[updateTask] description saved OK to server");
+          } else {
+            console.error("[updateTask] description FAILED to save:", result?.status, result?.error);
+          }
+        }
+      });
     }
   },
 
@@ -829,6 +854,32 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     }));
     // Soft delete on server
     apiDeleteTask(taskId);
+  },
+
+  // URLs
+  addTaskUrl: (taskId, url) => {
+    const tempId = `url_${Date.now()}`;
+    set((state) => ({
+      tasks: state.tasks.map((t) => t.id === taskId ? { ...t, urls: [...t.urls, { id: tempId, url }] } : t),
+    }));
+    // Persist and update with real ID from server
+    fetch(`/api/tasks/${taskId}`, {
+      method: "PATCH",
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ _addUrl: url }),
+    }).then((res) => res.json()).then((saved) => {
+      const realUrls = (saved.urls || []).map((u: { id: string; url: string }) => ({ id: u.id, url: u.url }));
+      set((state) => ({
+        tasks: state.tasks.map((t) => t.id === taskId ? { ...t, urls: realUrls } : t),
+      }));
+    }).catch((e) => console.error("API add url error:", e));
+  },
+
+  removeTaskUrl: (taskId, urlId) => {
+    set((state) => ({
+      tasks: state.tasks.map((t) => t.id === taskId ? { ...t, urls: t.urls.filter((u) => u.id !== urlId) } : t),
+    }));
+    apiPatchTask(taskId, { _removeUrl: urlId });
   },
 
   // Subtasks
