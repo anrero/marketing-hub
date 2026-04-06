@@ -52,7 +52,7 @@ interface BoardState {
   tags: Tag[];
   _serverLoaded: boolean;
 
-  loadFromServer: (workspaceId: string) => Promise<void>;
+  loadFromServer: (workspaceId: string) => Promise<boolean>;
   refreshFromServer: (workspaceId: string) => Promise<void>;
   setActiveBoard: (id: string) => void;
   setSelectedTask: (id: string | null) => void;
@@ -315,7 +315,10 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     try {
       // 1. Fetch boards
       const boardsRes = await fetch(`/api/boards?workspaceId=${workspaceId}`);
-      if (!boardsRes.ok) return;
+      if (!boardsRes.ok) {
+        console.error("Failed to load boards:", boardsRes.status, await boardsRes.text().catch(() => ""));
+        return false;
+      }
       const apiBoards = await boardsRes.json();
 
       // 2. Fetch tasks for each board in parallel
@@ -335,9 +338,6 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
         boards.push(transformApiBoard(apiBoards[i], tasks.map((t: Task) => t.id)));
       }
 
-      // 4. Fetch tags
-      // Tags come from the workspace - we'll use the ones from tasks for now
-      // and keep custom tags from local state
       const state = get();
 
       set({
@@ -348,8 +348,10 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
           : boards[0]?.id || "",
         _serverLoaded: true,
       });
+      return true;
     } catch (e) {
       console.error("Error loading from server:", e);
+      return false;
     }
   },
 

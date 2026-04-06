@@ -178,22 +178,26 @@ function AppShell() {
   const workspaceId = currentUser?.workspaceId;
   const [mobileOpen, setMobileOpen] = useState(false);
   const [dataLoading, setDataLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const initialLoadDone = useRef(false);
 
   // Load workspace data on mount
+  const loadAllData = async (wsId: string) => {
+    setDataLoading(true);
+    setLoadError(false);
+    const [boardsOk] = await Promise.all([
+      loadFromServer(wsId),
+      loadPagesFromServer(wsId),
+      loadWorkspacesFromServer(wsId),
+    ]);
+    if (!boardsOk) setLoadError(true);
+    setDataLoading(false);
+  };
+
   useEffect(() => {
     if (!workspaceId || initialLoadDone.current) return;
     initialLoadDone.current = true;
-    const load = async () => {
-      setDataLoading(true);
-      await Promise.all([
-        loadFromServer(workspaceId),
-        loadPagesFromServer(workspaceId),
-        loadWorkspacesFromServer(workspaceId),
-      ]);
-      setDataLoading(false);
-    };
-    load();
+    loadAllData(workspaceId);
   }, [workspaceId, loadFromServer, loadPagesFromServer, loadWorkspacesFromServer]);
 
   // Polling every 30s for multi-user sync
@@ -231,6 +235,24 @@ function AppShell() {
         <div className="flex flex-col items-center gap-3">
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
           <p className="text-sm text-muted-foreground">Cargando datos del workspace...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (loadError && !serverLoaded) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <div className="flex flex-col items-center gap-3 text-center px-4">
+          <p className="text-4xl">&#9888;&#65039;</p>
+          <p className="text-sm font-medium">No se pudo conectar con el servidor</p>
+          <p className="text-xs text-muted-foreground">Verifica tu conexión e intenta de nuevo</p>
+          <button
+            onClick={() => workspaceId && loadAllData(workspaceId)}
+            className="mt-2 rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90 transition-colors"
+          >
+            Reintentar
+          </button>
         </div>
       </div>
     );
