@@ -32,7 +32,11 @@ export async function POST(request: Request) {
       workspaceId: user.workspaceId,
     });
   } catch (e) {
-    console.error("Login error:", e);
-    return NextResponse.json({ error: "Error interno del servidor" }, { status: 500 });
+    const err = e instanceof Error ? e : new Error(String(e));
+    console.error("Login error:", err.message, err.stack);
+    return NextResponse.json(
+      { error: err.message, stack: process.env.NODE_ENV !== "production" ? err.stack : undefined },
+      { status: 500 },
+    );
   }
 }
