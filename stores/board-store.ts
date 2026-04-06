@@ -3,8 +3,8 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Task, Status, Board, TeamMember, Subtask, SavedView, ReminderOption, Priority, Tag, TaskTemplate } from "@/types";
-import { TASKS, BOARDS, COLUMNS, TEAM_MEMBERS, STORES, CAMPAIGN_TYPES } from "@/lib/mock-data";
-import { useHistoryStore } from "@/stores/history-store";
+import { COLUMNS, TEAM_MEMBERS, STORES, CAMPAIGN_TYPES } from "@/lib/mock-data";
+
 
 // Lazy import to avoid circular dependency
 function getSidebarStore() {
@@ -50,7 +50,10 @@ interface BoardState {
   activeViewId: string;
   customViews: SavedView[];
   tags: Tag[];
+  _serverLoaded: boolean;
 
+  loadFromServer: (workspaceId: string) => Promise<void>;
+  refreshFromServer: (workspaceId: string) => Promise<void>;
   setActiveBoard: (id: string) => void;
   setSelectedTask: (id: string | null) => void;
   setFilterStore: (store: string | null) => void;
@@ -179,10 +182,114 @@ function buildActivityEntries(task: Task, updates: Partial<Task>, authorId: stri
   return entries;
 }
 
+// ── API helpers (fire-and-forget with error logging) ──
+
+function apiPatchTask(taskId: string, data: Record<string, unknown>) {
+  fetch(`/api/tasks/${taskId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  }).catch((e) => console.error("API patch task error:", e));
+}
+
+function apiDeleteTask(taskId: string) {
+  fetch(`/api/tasks/${taskId}`, { method: "DELETE" }).catch((e) => console.error("API delete task error:", e));
+}
+
+function apiPatchBoard(boardId: string, data: Record<string, unknown>) {
+  fetch(`/api/boards/${boardId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  }).catch((e) => console.error("API patch board error:", e));
+}
+
+function apiDeleteBoard(boardId: string) {
+  fetch(`/api/boards/${boardId}`, { method: "DELETE" }).catch((e) => console.error("API delete board error:", e));
+}
+
+// ── Transform Prisma API data to frontend types ──
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function transformApiTask(apiTask: any): Task {
+  return {
+    id: apiTask.id,
+    title: apiTask.title || "",
+    status: apiTask.status || "por_hacer",
+    priority: apiTask.priority || "media",
+    store: apiTask.store || "",
+    assigneeId: apiTask.assigneeId || "",
+    campaignType: apiTask.campaignType || "",
+    campaignName: apiTask.campaignName || "",
+    adAccount: apiTask.adAccount || "",
+    dueDate: apiTask.dueDate ? new Date(apiTask.dueDate).toISOString().split("T")[0] : "",
+    urls: (apiTask.urls || []).map((u: { url: string }) => u.url),
+    attachments: (apiTask.attachments || []).map((a: { name: string; size: number }) => ({
+      name: a.name,
+      size: a.size >= 1048576 ? `${(a.size / 1048576).toFixed(1)} MB` : `${(a.size / 1024).toFixed(0)} KB`,
+    })),
+    comments: (apiTask.comments || []).map((c: { id: string; authorId: string; content: string; createdAt: string }) => ({
+      id: c.id,
+      authorId: c.authorId,
+      content: c.content,
+      createdAt: c.createdAt,
+    })),
+    activity: (apiTask.activities || []).map((a: { id: string; userId: string; action: string; field?: string; oldValue?: string; newValue?: string; createdAt: string }) => ({
+      id: a.id,
+      authorId: a.userId,
+      action: a.action,
+      field: a.field,
+      oldValue: a.oldValue,
+      newValue: a.newValue,
+      createdAt: a.createdAt,
+    })),
+    subtasks: (apiTask.subtasks || []).map((s: { id: string; title: string; completed: boolean }) => ({
+      id: s.id,
+      title: s.title,
+      completed: s.completed,
+    })),
+    tags: (apiTask.tags || []).map((t: { tag: { id: string } }) => t.tag.id),
+    reminder: apiTask.reminder || undefined,
+    archivedAt: apiTask.archivedAt || null,
+    blockedBy: (apiTask.blockedBy || []).map((d: { blocker: { id: string } }) => d.blocker.id),
+    estimatedTime: apiTask.estimatedTime || undefined,
+    estimatedUnit: apiTask.estimatedUnit || undefined,
+    actualTime: apiTask.realTime || undefined,
+    actualUnit: apiTask.realUnit || undefined,
+    coverImage: apiTask.coverImage || null,
+  };
+}
+
+// Map server column names to frontend status IDs
+const COLUMN_NAME_TO_STATUS: Record<string, string> = {
+  "por hacer": "por_hacer",
+  "en proceso": "en_proceso",
+  "en revisión": "en_revision",
+  "completado": "completado",
+};
+
+function columnNameToStatusId(name: string): string {
+  return COLUMN_NAME_TO_STATUS[name.toLowerCase()] || name.toLowerCase().replace(/\s+/g, "_");
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function transformApiBoard(apiBoard: any, taskIds: string[]): Board {
+  return {
+    id: apiBoard.id,
+    name: apiBoard.name,
+    columns: (apiBoard.columns || []).map((c: { id: string; name: string; color?: string }) => ({
+      id: columnNameToStatusId(c.name),
+      title: c.name,
+      // Don't pass server hex colors — let the frontend use its own Tailwind-based columnAccents
+    })),
+    taskIds,
+  };
+}
+
 export const useBoardStore = create<BoardState>()(persist((set, get) => ({
-  boards: BOARDS,
-  tasks: TASKS,
-  activeBoardId: "b1",
+  boards: [],
+  tasks: [],
+  activeBoardId: "",
   selectedTaskId: null,
   undoStack: [],
   redoStack: [],
@@ -201,6 +308,85 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
   savedViews: BUILT_IN_VIEWS,
   activeViewId: "v_all",
   customViews: [],
+  _serverLoaded: false,
+
+  // ── Load all boards + tasks from server ──
+  loadFromServer: async (workspaceId: string) => {
+    try {
+      // 1. Fetch boards
+      const boardsRes = await fetch(`/api/boards?workspaceId=${workspaceId}`);
+      if (!boardsRes.ok) return;
+      const apiBoards = await boardsRes.json();
+
+      // 2. Fetch tasks for each board in parallel
+      const taskResults = await Promise.all(
+        apiBoards.map((b: { id: string }) =>
+          fetch(`/api/tasks?boardId=${b.id}`).then((r) => r.ok ? r.json() : [])
+        )
+      );
+
+      // 3. Transform and collect
+      const allTasks: Task[] = [];
+      const boards: Board[] = [];
+      for (let i = 0; i < apiBoards.length; i++) {
+        const apiTasks = taskResults[i] || [];
+        const tasks = apiTasks.map(transformApiTask);
+        allTasks.push(...tasks);
+        boards.push(transformApiBoard(apiBoards[i], tasks.map((t: Task) => t.id)));
+      }
+
+      // 4. Fetch tags
+      // Tags come from the workspace - we'll use the ones from tasks for now
+      // and keep custom tags from local state
+      const state = get();
+
+      set({
+        boards,
+        tasks: allTasks,
+        activeBoardId: state.activeBoardId && boards.some((b) => b.id === state.activeBoardId)
+          ? state.activeBoardId
+          : boards[0]?.id || "",
+        _serverLoaded: true,
+      });
+    } catch (e) {
+      console.error("Error loading from server:", e);
+    }
+  },
+
+  // ── Refresh without resetting UI state ──
+  refreshFromServer: async (workspaceId: string) => {
+    try {
+      const boardsRes = await fetch(`/api/boards?workspaceId=${workspaceId}`);
+      if (!boardsRes.ok) return;
+      const apiBoards = await boardsRes.json();
+
+      const taskResults = await Promise.all(
+        apiBoards.map((b: { id: string }) =>
+          fetch(`/api/tasks?boardId=${b.id}`).then((r) => r.ok ? r.json() : [])
+        )
+      );
+
+      const allTasks: Task[] = [];
+      const boards: Board[] = [];
+      for (let i = 0; i < apiBoards.length; i++) {
+        const apiTasks = taskResults[i] || [];
+        const tasks = apiTasks.map(transformApiTask);
+        allTasks.push(...tasks);
+        boards.push(transformApiBoard(apiBoards[i], tasks.map((t: Task) => t.id)));
+      }
+
+      const state = get();
+      set({
+        boards,
+        tasks: allTasks,
+        activeBoardId: state.activeBoardId && boards.some((b) => b.id === state.activeBoardId)
+          ? state.activeBoardId
+          : boards[0]?.id || "",
+      });
+    } catch (e) {
+      console.error("Error refreshing from server:", e);
+    }
+  },
 
   setActiveBoard: (id) => set({ activeBoardId: id }),
   setSelectedTask: (id) => set({ selectedTaskId: id }),
@@ -231,57 +417,155 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
       undoStack: [...s.undoStack, { action: "moveTask", data: { taskId, fromStatus: oldStatus, toStatus: newStatus } }].slice(-30),
       redoStack: [],
     }));
+    // Persist to server
+    apiPatchTask(taskId, { status: newStatus });
   },
 
-  updateTaskWithActivity: (taskId, updates, authorId = "u1") =>
+  updateTaskWithActivity: (taskId, updates, authorId = "u1") => {
     set((state) => {
       const task = state.tasks.find((t) => t.id === taskId);
       if (!task) return state;
       const allMembers = [...TEAM_MEMBERS, ...state.customTeamMembers];
       const newEntries = buildActivityEntries(task, updates, authorId, allMembers);
       return { tasks: state.tasks.map((t) => t.id === taskId ? { ...t, ...updates, activity: [...t.activity, ...newEntries] } : t) };
-    }),
+    });
+    // Persist relevant fields to server
+    const serverUpdates: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(updates)) {
+      if (["activity", "comments", "attachments", "urls", "subtasks"].includes(key)) continue;
+      if (key === "dueDate" && value) serverUpdates.dueDate = value;
+      else serverUpdates[key] = value;
+    }
+    if (Object.keys(serverUpdates).length > 0) {
+      apiPatchTask(taskId, serverUpdates);
+    }
+  },
 
-  updateTask: (taskId, updates) =>
-    set((state) => ({ tasks: state.tasks.map((t) => t.id === taskId ? { ...t, ...updates } : t) })),
+  updateTask: (taskId, updates) => {
+    set((state) => ({ tasks: state.tasks.map((t) => t.id === taskId ? { ...t, ...updates } : t) }));
+    // Persist relevant fields to server
+    const serverUpdates: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(updates)) {
+      if (["activity", "comments", "attachments", "urls", "subtasks"].includes(key)) continue;
+      if (key === "dueDate" && value) serverUpdates.dueDate = value;
+      else serverUpdates[key] = value;
+    }
+    if (Object.keys(serverUpdates).length > 0) {
+      apiPatchTask(taskId, serverUpdates);
+    }
+  },
 
-  addTask: (task) =>
+  addTask: (task) => {
     set((state) => ({
       tasks: [...state.tasks, task],
       boards: state.boards.map((b) => b.id === state.activeBoardId ? { ...b, taskIds: [...b.taskIds, task.id] } : b),
-    })),
+    }));
+    // Persist to server - the task was created locally with a temp ID
+    // We POST to create it on the server, then update the local ID
+    const state = get();
+    const boardId = state.activeBoardId;
+    fetch("/api/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        boardId,
+        title: task.title,
+        status: task.status,
+        priority: task.priority,
+        store: task.store || undefined,
+        assigneeId: task.assigneeId || undefined,
+        campaignType: task.campaignType || undefined,
+        campaignName: task.campaignName || undefined,
+        adAccount: task.adAccount || undefined,
+        dueDate: task.dueDate || undefined,
+      }),
+    }).then((r) => r.json()).then((saved) => {
+      // Replace temp ID with server ID
+      set((s) => ({
+        tasks: s.tasks.map((t) => t.id === task.id ? { ...t, id: saved.id } : t),
+        boards: s.boards.map((b) => ({
+          ...b,
+          taskIds: b.taskIds.map((id) => id === task.id ? saved.id : id),
+        })),
+        selectedTaskId: s.selectedTaskId === task.id ? saved.id : s.selectedTaskId,
+      }));
+    }).catch((e) => console.error("API create task error:", e));
+  },
 
-  addQuickTask: (title) =>
-    set((state) => {
-      const newId = `t${Date.now()}`;
-      const newTask: Task = {
-        id: newId, title, status: "por_hacer", priority: "media", store: "", assigneeId: "u1",
-        campaignType: "", campaignName: "", adAccount: "", dueDate: new Date().toISOString().split("T")[0],
-        urls: [], attachments: [], comments: [], activity: [
-          { id: `a${Date.now()}_create`, authorId: "u1", action: "creó la tarea", createdAt: new Date().toISOString() }
-        ], subtasks: [],
-      };
-      return {
-        tasks: [...state.tasks, newTask],
-        boards: state.boards.map((b) => b.id === state.activeBoardId ? { ...b, taskIds: [...b.taskIds, newId] } : b),
-      };
-    }),
+  addQuickTask: (title) => {
+    const newId = `t${Date.now()}`;
+    const newTask: Task = {
+      id: newId, title, status: "por_hacer", priority: "media", store: "", assigneeId: "u1",
+      campaignType: "", campaignName: "", adAccount: "", dueDate: new Date().toISOString().split("T")[0],
+      urls: [], attachments: [], comments: [], activity: [
+        { id: `a${Date.now()}_create`, authorId: "u1", action: "creó la tarea", createdAt: new Date().toISOString() }
+      ], subtasks: [],
+    };
+    set((state) => ({
+      tasks: [...state.tasks, newTask],
+      boards: state.boards.map((b) => b.id === state.activeBoardId ? { ...b, taskIds: [...b.taskIds, newId] } : b),
+    }));
+    // Persist to server
+    const state = get();
+    fetch("/api/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        boardId: state.activeBoardId,
+        title,
+        status: "por_hacer",
+        priority: "media",
+        dueDate: new Date().toISOString().split("T")[0],
+      }),
+    }).then((r) => r.json()).then((saved) => {
+      set((s) => ({
+        tasks: s.tasks.map((t) => t.id === newId ? { ...t, id: saved.id } : t),
+        boards: s.boards.map((b) => ({
+          ...b,
+          taskIds: b.taskIds.map((id) => id === newId ? saved.id : id),
+        })),
+        selectedTaskId: s.selectedTaskId === newId ? saved.id : s.selectedTaskId,
+      }));
+    }).catch((e) => console.error("API quick task error:", e));
+  },
 
-  addBoard: (name) =>
-    set((state) => {
-      const newId = `b${Date.now()}`;
-      return { boards: [...state.boards, { id: newId, name, columns: COLUMNS, taskIds: [] }], activeBoardId: newId };
-    }),
+  addBoard: (name) => {
+    const newId = `b${Date.now()}`;
+    set((state) => ({
+      boards: [...state.boards, { id: newId, name, columns: COLUMNS, taskIds: [] }],
+      activeBoardId: newId,
+    }));
+    // Persist to server
+    const authData = JSON.parse(localStorage.getItem("mh-auth-storage") || "{}");
+    const workspaceId = authData?.state?.currentUser?.workspaceId;
+    if (workspaceId) {
+      fetch("/api/boards", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, workspaceId }),
+      }).then((r) => r.json()).then((saved) => {
+        const serverBoard = transformApiBoard(saved, []);
+        set((s) => ({
+          boards: s.boards.map((b) => b.id === newId ? serverBoard : b),
+          activeBoardId: s.activeBoardId === newId ? saved.id : s.activeBoardId,
+        }));
+      }).catch((e) => console.error("API create board error:", e));
+    }
+  },
 
-  renameBoard: (id, name) =>
-    set((state) => ({ boards: state.boards.map((b) => b.id === id ? { ...b, name } : b) })),
+  renameBoard: (id, name) => {
+    set((state) => ({ boards: state.boards.map((b) => b.id === id ? { ...b, name } : b) }));
+    apiPatchBoard(id, { name });
+  },
 
-  deleteBoard: (id) =>
+  deleteBoard: (id) => {
     set((state) => {
       if (state.boards.length <= 1) return state;
       const remaining = state.boards.filter((b) => b.id !== id);
       return { boards: remaining, activeBoardId: state.activeBoardId === id ? remaining[0].id : state.activeBoardId };
-    }),
+    });
+    apiDeleteBoard(id);
+  },
 
   duplicateBoard: (id) =>
     set((state) => {
@@ -393,47 +677,64 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
       undoStack: [...s.undoStack, { action: "deleteTask", data: { task: taskCopy, boardId } }].slice(-30),
       redoStack: [],
     }));
+    // Soft delete on server
+    apiDeleteTask(taskId);
   },
 
   // Subtasks
-  addSubtask: (taskId, title) =>
+  addSubtask: (taskId, title) => {
+    const subId = `st${Date.now()}`;
     set((state) => ({
-      tasks: state.tasks.map((t) => t.id === taskId ? { ...t, subtasks: [...(t.subtasks ?? []), { id: `st${Date.now()}`, title, completed: false }] } : t),
-    })),
+      tasks: state.tasks.map((t) => t.id === taskId ? { ...t, subtasks: [...(t.subtasks ?? []), { id: subId, title, completed: false }] } : t),
+    }));
+    apiPatchTask(taskId, { _addSubtask: title });
+  },
 
-  toggleSubtask: (taskId, subtaskId) =>
+  toggleSubtask: (taskId, subtaskId) => {
     set((state) => ({
       tasks: state.tasks.map((t) => t.id === taskId ? { ...t, subtasks: (t.subtasks ?? []).map((s) => s.id === subtaskId ? { ...s, completed: !s.completed } : s) } : t),
-    })),
+    }));
+    apiPatchTask(taskId, { _toggleSubtask: subtaskId });
+  },
 
-  removeSubtask: (taskId, subtaskId) =>
+  removeSubtask: (taskId, subtaskId) => {
     set((state) => ({
       tasks: state.tasks.map((t) => t.id === taskId ? { ...t, subtasks: (t.subtasks ?? []).filter((s) => s.id !== subtaskId) } : t),
-    })),
+    }));
+    apiPatchTask(taskId, { _removeSubtask: subtaskId });
+  },
 
   reorderSubtasks: (taskId, subtasks) =>
     set((state) => ({ tasks: state.tasks.map((t) => t.id === taskId ? { ...t, subtasks } : t) })),
 
-  setReminder: (taskId, reminder) =>
-    set((state) => ({ tasks: state.tasks.map((t) => t.id === taskId ? { ...t, reminder } : t) })),
+  setReminder: (taskId, reminder) => {
+    set((state) => ({ tasks: state.tasks.map((t) => t.id === taskId ? { ...t, reminder } : t) }));
+    apiPatchTask(taskId, { reminder });
+  },
 
   // Bulk
-  bulkMove: (taskIds, status) =>
+  bulkMove: (taskIds, status) => {
     set((state) => ({
       tasks: state.tasks.map((t) => taskIds.includes(t.id) ? { ...t, status, activity: [...t.activity, { id: `a${Date.now()}_bulk`, authorId: "u1", action: `movió a "${statusLabels[status]}"`, field: "status", newValue: statusLabels[status], createdAt: new Date().toISOString() }] } : t),
-    })),
+    }));
+    taskIds.forEach((id) => apiPatchTask(id, { status }));
+  },
 
-  bulkAssign: (taskIds, assigneeId) =>
+  bulkAssign: (taskIds, assigneeId) => {
     set((state) => {
       const allMembers = [...TEAM_MEMBERS, ...state.customTeamMembers];
       const name = allMembers.find((m) => m.id === assigneeId)?.name ?? assigneeId;
       return { tasks: state.tasks.map((t) => taskIds.includes(t.id) ? { ...t, assigneeId, activity: [...t.activity, { id: `a${Date.now()}_bulk`, authorId: "u1", action: `asignó a "${name}"`, field: "assigneeId", newValue: name, createdAt: new Date().toISOString() }] } : t) };
-    }),
+    });
+    taskIds.forEach((id) => apiPatchTask(id, { assigneeId }));
+  },
 
-  bulkPriority: (taskIds, priority) =>
+  bulkPriority: (taskIds, priority) => {
     set((state) => ({
       tasks: state.tasks.map((t) => taskIds.includes(t.id) ? { ...t, priority, activity: [...t.activity, { id: `a${Date.now()}_bulk`, authorId: "u1", action: `cambió prioridad a "${priority}"`, field: "priority", newValue: priority, createdAt: new Date().toISOString() }] } : t),
-    })),
+    }));
+    taskIds.forEach((id) => apiPatchTask(id, { priority }));
+  },
 
   bulkDelete: (taskIds) => {
     const state = get();
@@ -458,6 +759,7 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
       boards: s.boards.map((b) => ({ ...b, taskIds: b.taskIds.filter((id) => !taskIds.includes(id)) })),
       selectedTaskId: taskIds.includes(s.selectedTaskId ?? "") ? null : s.selectedTaskId,
     }));
+    taskIds.forEach((id) => apiDeleteTask(id));
   },
 
   bulkDuplicate: (taskIds) =>
@@ -559,6 +861,7 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
         undoStack: newUndoStack,
         redoStack: [...state.redoStack, lastAction],
       });
+      apiPatchTask(taskId, { status: fromStatus });
       return;
     }
 
@@ -580,6 +883,7 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
         undoStack: [...state.undoStack, lastAction],
         redoStack: newRedoStack,
       });
+      apiDeleteTask(task.id);
       return;
     }
 
@@ -590,6 +894,7 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
         undoStack: [...state.undoStack, lastAction],
         redoStack: newRedoStack,
       });
+      apiPatchTask(taskId, { status: toStatus });
       return;
     }
 
@@ -597,16 +902,24 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
   },
 
   // Archive
-  archiveTask: (taskId) => set((s) => ({
-    tasks: s.tasks.map((t) => t.id === taskId ? { ...t, archivedAt: new Date().toISOString() } : t),
-  })),
-  unarchiveTask: (taskId) => set((s) => ({
-    tasks: s.tasks.map((t) => t.id === taskId ? { ...t, archivedAt: null } : t),
-  })),
+  archiveTask: (taskId) => {
+    set((s) => ({
+      tasks: s.tasks.map((t) => t.id === taskId ? { ...t, archivedAt: new Date().toISOString() } : t),
+    }));
+    apiPatchTask(taskId, { archivedAt: new Date().toISOString() });
+  },
+  unarchiveTask: (taskId) => {
+    set((s) => ({
+      tasks: s.tasks.map((t) => t.id === taskId ? { ...t, archivedAt: null } : t),
+    }));
+    apiPatchTask(taskId, { archivedAt: null });
+  },
   archiveCompleted: () => set((s) => {
     const board = s.boards.find((b) => b.id === s.activeBoardId);
     if (!board) return s;
     const now = new Date().toISOString();
+    const toArchive = s.tasks.filter((t) => board.taskIds.includes(t.id) && t.status === "completado" && !t.archivedAt);
+    toArchive.forEach((t) => apiPatchTask(t.id, { archivedAt: now }));
     return {
       tasks: s.tasks.map((t) => board.taskIds.includes(t.id) && t.status === "completado" && !t.archivedAt ? { ...t, archivedAt: now } : t),
     };
@@ -651,11 +964,8 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
   }),
 }), {
   name: "mh-board-storage",
-  version: 1,
+  version: 3,
   partialize: (state) => ({
-    boards: state.boards,
-    tasks: state.tasks,
-    activeBoardId: state.activeBoardId,
     customStores: state.customStores,
     customCampaignTypes: state.customCampaignTypes,
     customAdAccounts: state.customAdAccounts,
@@ -666,4 +976,15 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     viewMode: state.viewMode,
     activeViewId: state.activeViewId,
   }),
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  migrate: (persisted: any) => {
+    // Wipe boards/tasks/activeBoardId that may have leaked from old versions
+    if (persisted && typeof persisted === "object") {
+      delete persisted.boards;
+      delete persisted.tasks;
+      delete persisted.activeBoardId;
+      delete persisted._serverLoaded;
+    }
+    return persisted;
+  },
 }));

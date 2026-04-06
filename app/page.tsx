@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { Sidebar } from "@/components/sidebar";
 import { BoardHeader } from "@/components/board-header";
 import { KanbanBoard } from "@/components/kanban-board";
@@ -23,7 +23,7 @@ import { Onboarding } from "@/components/onboarding";
 import { ChatWidget } from "@/components/chat-widget";
 import { LoginPage } from "@/components/login-page";
 import { useAuthStore } from "@/stores/auth-store";
-import { Inbox, Menu } from "lucide-react";
+import { Inbox, Menu, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 function InboxView() {
@@ -130,9 +130,33 @@ function BoardView() {
 
 export default function Home() {
   const currentUser = useAuthStore((s) => s.currentUser);
+  const checkSession = useAuthStore((s) => s.checkSession);
   const [hydrated, setHydrated] = useState(false);
+  const [sessionChecked, setSessionChecked] = useState(false);
+
   useEffect(() => { setHydrated(true); }, []);
-  if (!hydrated) return <div className="flex h-screen items-center justify-center"><div className="text-2xl animate-pulse">🚀</div></div>;
+
+  // Check session on mount
+  useEffect(() => {
+    if (!hydrated) return;
+    if (!currentUser) {
+      setSessionChecked(true);
+      return;
+    }
+    checkSession().then(() => setSessionChecked(true));
+  }, [hydrated, currentUser, checkSession]);
+
+  if (!hydrated || !sessionChecked) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          <p className="text-sm text-muted-foreground">Cargando...</p>
+        </div>
+      </div>
+    );
+  }
+
   if (!currentUser) return <LoginPage />;
   return <AppShell />;
 }
@@ -145,7 +169,41 @@ function AppShell() {
   const boards = useBoardStore((s) => s.boards);
   const activeBoardId = useBoardStore((s) => s.activeBoardId);
   const viewMode = useBoardStore((s) => s.viewMode);
+  const serverLoaded = useBoardStore((s) => s._serverLoaded);
+  const loadFromServer = useBoardStore((s) => s.loadFromServer);
+  const refreshFromServer = useBoardStore((s) => s.refreshFromServer);
+  const loadPagesFromServer = useSidebarStore((s) => s.loadPagesFromServer);
+  const loadWorkspacesFromServer = useSidebarStore((s) => s.loadWorkspacesFromServer);
+  const currentUser = useAuthStore((s) => s.currentUser);
+  const workspaceId = currentUser?.workspaceId;
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [dataLoading, setDataLoading] = useState(true);
+  const initialLoadDone = useRef(false);
+
+  // Load workspace data on mount
+  useEffect(() => {
+    if (!workspaceId || initialLoadDone.current) return;
+    initialLoadDone.current = true;
+    const load = async () => {
+      setDataLoading(true);
+      await Promise.all([
+        loadFromServer(workspaceId),
+        loadPagesFromServer(workspaceId),
+        loadWorkspacesFromServer(workspaceId),
+      ]);
+      setDataLoading(false);
+    };
+    load();
+  }, [workspaceId, loadFromServer, loadPagesFromServer, loadWorkspacesFromServer]);
+
+  // Polling every 30s for multi-user sync
+  useEffect(() => {
+    if (!workspaceId) return;
+    const interval = setInterval(() => {
+      refreshFromServer(workspaceId);
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [workspaceId, refreshFromServer]);
 
   // P2-18: Dynamic page title
   useEffect(() => {
@@ -166,6 +224,17 @@ function AppShell() {
     }
     document.title = title;
   }, [mainView, activePageId, pages, activeBoardId, boards, viewMode]);
+
+  if (dataLoading && !serverLoaded) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          <p className="text-sm text-muted-foreground">Cargando datos del workspace...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen overflow-hidden">

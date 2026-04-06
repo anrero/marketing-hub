@@ -1,7 +1,6 @@
 "use client";
 
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
 
 export interface ChatMessage {
   id: string;
@@ -17,6 +16,8 @@ export interface ChatMessage {
 
 interface ChatState {
   messages: ChatMessage[];
+  _loaded: Record<string, boolean>;
+  loadMessages: (channelType: "general" | "board" | "direct", channelId: string, userId?: string) => Promise<void>;
   sendMessage: (text: string, channelType: "general" | "board" | "direct", channelId: string, senderId: string, senderName: string, mentions?: string[]) => void;
   getMessages: (channelType: "general" | "board" | "direct", channelId: string) => ChatMessage[];
   markAsRead: (channelType: "general" | "board" | "direct", channelId: string, userId: string) => void;
@@ -24,23 +25,68 @@ interface ChatState {
   getUnreadCountForChannel: (channelType: "general" | "board" | "direct", channelId: string, userId: string) => number;
 }
 
-const MOCK_MESSAGES: ChatMessage[] = [
-  { id: "cm1", text: "¡Bienvenidos al Marketing Hub! 🚀", senderId: "u1", senderName: "Andrey", channelType: "general", channelId: "general", timestamp: "2026-03-30T10:00:00.000Z", read: true, mentions: [] },
-  { id: "cm2", text: "Todo listo para la campaña de Día de la Madre", senderId: "u2", senderName: "María", channelType: "general", channelId: "general", timestamp: "2026-03-30T14:30:00.000Z", read: true, mentions: [] },
-  { id: "cm3", text: "Los creativos del carrusel están en revisión", senderId: "u4", senderName: "Ana", channelType: "board", channelId: "b1", timestamp: "2026-03-31T09:15:00.000Z", read: true, mentions: [] },
-  { id: "cm4", text: "¿Aprobamos el presupuesto de WildropShop?", senderId: "u3", senderName: "Carlos", channelType: "direct", channelId: "u1", timestamp: "2026-03-31T16:00:00.000Z", read: false, mentions: [] },
-];
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function transformApiMessage(msg: any): ChatMessage {
+  return {
+    id: msg.id,
+    text: msg.text,
+    senderId: msg.senderId,
+    senderName: msg.sender?.name || msg.senderId,
+    channelType: msg.channelType as "general" | "board" | "direct",
+    channelId: msg.channelId,
+    timestamp: msg.createdAt,
+    read: msg.read,
+    mentions: [],
+  };
+}
 
-export const useChatStore = create<ChatState>()(persist((set, get) => ({
-  messages: MOCK_MESSAGES,
+export const useChatStore = create<ChatState>()((set, get) => ({
+  messages: [],
+  _loaded: {},
+
+  loadMessages: async (channelType, channelId, userId) => {
+    const key = `${channelType}:${channelId}`;
+    try {
+      const params = new URLSearchParams({ channelType, channelId });
+      if (userId) params.set("userId", userId);
+      const res = await fetch(`/api/chat?${params}`);
+      if (!res.ok) return;
+      const apiMessages = await res.json();
+      const newMessages = apiMessages.map(transformApiMessage);
+      set((s) => {
+        // Remove old messages for this channel and add fresh ones
+        const otherMessages = s.messages.filter((m) =>
+          !(m.channelType === channelType && m.channelId === channelId)
+        );
+        return {
+          messages: [...otherMessages, ...newMessages],
+          _loaded: { ...s._loaded, [key]: true },
+        };
+      });
+    } catch (e) {
+      console.error("Error loading chat messages:", e);
+    }
+  },
 
   sendMessage: (text, channelType, channelId, senderId, senderName, mentions = []) => {
+    const tempId = `cm_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`;
     const msg: ChatMessage = {
-      id: `cm_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+      id: tempId,
       text, senderId, senderName, channelType, channelId,
       timestamp: new Date().toISOString(), read: false, mentions,
     };
     set((s) => ({ messages: [...s.messages, msg] }));
+    // Persist to server
+    fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, channelType, channelId, senderId }),
+    }).then((r) => r.json()).then((saved) => {
+      const serverMsg = transformApiMessage(saved);
+      set((s) => ({
+        messages: s.messages.map((m) => m.id === tempId ? serverMsg : m),
+      }));
+    }).catch((e) => console.error("API send message error:", e));
   },
 
   getMessages: (channelType, channelId) => {
@@ -51,17 +97,25 @@ export const useChatStore = create<ChatState>()(persist((set, get) => ({
     return s.messages.filter((m) => m.channelType === channelType && m.channelId === channelId);
   },
 
-  markAsRead: (channelType, channelId, userId) => set((s) => ({
-    messages: s.messages.map((m) => {
-      if (m.senderId === userId) return m;
-      if (channelType === "direct") {
-        if (m.channelType === "direct" && (m.channelId === userId || m.senderId === channelId)) return { ...m, read: true };
-      } else {
-        if (m.channelType === channelType && m.channelId === channelId) return { ...m, read: true };
-      }
-      return m;
-    }),
-  })),
+  markAsRead: (channelType, channelId, userId) => {
+    set((s) => ({
+      messages: s.messages.map((m) => {
+        if (m.senderId === userId) return m;
+        if (channelType === "direct") {
+          if (m.channelType === "direct" && (m.channelId === userId || m.senderId === channelId)) return { ...m, read: true };
+        } else {
+          if (m.channelType === channelType && m.channelId === channelId) return { ...m, read: true };
+        }
+        return m;
+      }),
+    }));
+    // Persist to server
+    fetch("/api/chat/read", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ channelType, channelId, userId }),
+    }).catch((e) => console.error("API mark read error:", e));
+  },
 
   getUnreadCount: (userId) => {
     return get().messages.filter((m) => !m.read && m.senderId !== userId).length;
@@ -74,7 +128,4 @@ export const useChatStore = create<ChatState>()(persist((set, get) => ({
     }
     return s.messages.filter((m) => m.channelType === channelType && m.channelId === channelId && !m.read && m.senderId !== userId).length;
   },
-}), {
-  name: "mh-chat-storage",
-  version: 1,
 }));

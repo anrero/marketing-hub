@@ -3,118 +3,144 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-export interface AuthUser {
-  id: string;
-  name: string;
-  email: string;
-  password: string; // btoa encoded
-  avatar: string;
-  role: "owner" | "admin" | "editor" | "viewer";
-  color?: string;
-  createdAt: string;
-}
-
 export interface CurrentSession {
   id: string;
   name: string;
   email: string;
   role: string;
-  avatar: string;
-  color?: string;
+  avatarColor: string;
+  workspaceId: string | null;
 }
-
-const AVATAR_COLORS = [
-  "bg-blue-600", "bg-emerald-600", "bg-purple-600", "bg-pink-600",
-  "bg-amber-600", "bg-cyan-600", "bg-red-600", "bg-indigo-600",
-];
-
-function getInitials(name: string): string {
-  return name.split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 2);
-}
-
-function pickColor(email: string): string {
-  let hash = 0;
-  for (let i = 0; i < email.length; i++) hash = ((hash << 5) - hash + email.charCodeAt(i)) | 0;
-  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
-}
-
-// Users array starts empty — first registered user becomes owner
-const DEFAULT_USERS: AuthUser[] = [];
 
 interface AuthState {
-  users: AuthUser[];
   currentUser: CurrentSession | null;
+  isLoading: boolean;
+  isCheckingSession: boolean;
 
-  register: (name: string, email: string, password: string) => { success: boolean; error?: string };
-  login: (email: string, password: string) => { success: boolean; error?: string };
+  register: (name: string, email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
-  updateProfile: (updates: Partial<Pick<CurrentSession, "name" | "email" | "color">>) => void;
-  changePassword: (oldPassword: string, newPassword: string) => { success: boolean; error?: string };
+  checkSession: () => Promise<boolean>;
+  updateProfile: (updates: Partial<Pick<CurrentSession, "name" | "email" | "avatarColor">>) => void;
 }
 
 export const useAuthStore = create<AuthState>()(persist((set, get) => ({
-  users: DEFAULT_USERS,
   currentUser: null,
+  isLoading: false,
+  isCheckingSession: false,
 
-  register: (name, email, password) => {
-    const state = get();
-    if (state.users.some((u) => u.email.toLowerCase() === email.toLowerCase())) {
-      return { success: false, error: "Este email ya está registrado" };
+  register: async (name, email, password) => {
+    set({ isLoading: true });
+    try {
+      const res = await fetch("/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, email, password }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        set({ isLoading: false });
+        return { success: false, error: data.error || "Error al crear cuenta" };
+      }
+      const session: CurrentSession = {
+        id: data.id,
+        name: data.name,
+        email: data.email,
+        role: data.role,
+        avatarColor: data.avatarColor,
+        workspaceId: data.workspaceId,
+      };
+      set({ currentUser: session, isLoading: false });
+      return { success: true };
+    } catch {
+      set({ isLoading: false });
+      return { success: false, error: "Error de conexión con el servidor" };
     }
-    if (password.length < 6) {
-      return { success: false, error: "La contraseña debe tener al menos 6 caracteres" };
-    }
-    const id = `u_${Date.now()}`;
-    const avatar = getInitials(name);
-    const color = pickColor(email);
-    const newUser: AuthUser = {
-      id, name, email: email.toLowerCase(), password: btoa(password),
-      avatar, role: state.users.length === 0 ? "owner" : "editor",
-      color, createdAt: new Date().toISOString(),
-    };
-    const session: CurrentSession = { id, name, email: email.toLowerCase(), role: newUser.role, avatar, color };
-    set({ users: [...state.users, newUser], currentUser: session });
-    return { success: true };
   },
 
-  login: (email, password) => {
-    const state = get();
-    const user = state.users.find((u) => u.email.toLowerCase() === email.toLowerCase());
-    if (!user) return { success: false, error: "Email no encontrado" };
-    if (user.password !== btoa(password)) return { success: false, error: "Contraseña incorrecta" };
-    const session: CurrentSession = { id: user.id, name: user.name, email: user.email, role: user.role, avatar: user.avatar, color: user.color };
-    set({ currentUser: session });
-    return { success: true };
+  login: async (email, password) => {
+    set({ isLoading: true });
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        set({ isLoading: false });
+        return { success: false, error: data.error || "Error al iniciar sesión" };
+      }
+      const session: CurrentSession = {
+        id: data.id,
+        name: data.name,
+        email: data.email,
+        role: data.role,
+        avatarColor: data.avatarColor,
+        workspaceId: data.workspaceId,
+      };
+      set({ currentUser: session, isLoading: false });
+      return { success: true };
+    } catch {
+      set({ isLoading: false });
+      return { success: false, error: "Error de conexión con el servidor" };
+    }
   },
 
   logout: () => set({ currentUser: null }),
 
+  checkSession: async () => {
+    const state = get();
+    if (!state.currentUser) return false;
+    set({ isCheckingSession: true });
+    try {
+      const res = await fetch("/api/auth/me", {
+        headers: { "x-user-id": state.currentUser.id },
+      });
+      if (!res.ok) {
+        set({ currentUser: null, isCheckingSession: false });
+        return false;
+      }
+      const data = await res.json();
+      set({
+        currentUser: {
+          id: data.id,
+          name: data.name,
+          email: data.email,
+          role: data.role,
+          avatarColor: data.avatarColor,
+          workspaceId: data.workspaceId,
+        },
+        isCheckingSession: false,
+      });
+      return true;
+    } catch {
+      set({ isCheckingSession: false });
+      return false;
+    }
+  },
+
   updateProfile: (updates) => {
     const state = get();
     if (!state.currentUser) return;
-    const newSession = { ...state.currentUser, ...updates };
-    const newUsers = state.users.map((u) =>
-      u.id === state.currentUser!.id
-        ? { ...u, name: newSession.name, email: newSession.email, avatar: getInitials(newSession.name), color: newSession.color }
-        : u,
-    );
-    set({
-      currentUser: { ...newSession, avatar: getInitials(newSession.name) },
-      users: newUsers,
-    });
-  },
-
-  changePassword: (oldPassword, newPassword) => {
-    const state = get();
-    if (!state.currentUser) return { success: false, error: "No hay sesión activa" };
-    const user = state.users.find((u) => u.id === state.currentUser!.id);
-    if (!user) return { success: false, error: "Usuario no encontrado" };
-    if (user.password !== btoa(oldPassword)) return { success: false, error: "Contraseña actual incorrecta" };
-    if (newPassword.length < 6) return { success: false, error: "La nueva contraseña debe tener al menos 6 caracteres" };
-    set({ users: state.users.map((u) => u.id === state.currentUser!.id ? { ...u, password: btoa(newPassword) } : u) });
-    return { success: true };
+    set({ currentUser: { ...state.currentUser, ...updates } });
   },
 }), {
   name: "mh-auth-storage",
-  version: 1,
+  version: 3,
+  partialize: (state) => ({
+    currentUser: state.currentUser,
+  }),
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  migrate: (persisted: any) => {
+    // Wipe old users array and password data from v1
+    if (persisted && typeof persisted === "object") {
+      delete persisted.users;
+      // If currentUser has old shape (avatar instead of avatarColor), wipe it
+      if (persisted.currentUser && !persisted.currentUser.workspaceId) {
+        persisted.currentUser = null;
+      }
+    }
+    return persisted;
+  },
 }));

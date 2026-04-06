@@ -76,7 +76,10 @@ interface SidebarState {
   mainView: "board" | "dashboard" | "page" | "inbox";
   trash: TrashItem[];
   favorites: { type: "board" | "page"; id: string }[];
+  _pagesLoaded: boolean;
 
+  loadPagesFromServer: (workspaceId: string) => Promise<void>;
+  loadWorkspacesFromServer: (workspaceId: string) => Promise<void>;
   toggleCollapsed: () => void;
   setActiveWorkspace: (id: string) => void;
   addRecent: (item: { type: "board" | "task" | "page"; id: string; title: string; emoji: string }) => void;
@@ -115,60 +118,96 @@ function b(id: string, type: BlockType, content: string, extra?: Partial<Block>)
   return { id, type, content, ...extra };
 }
 
-const MOCK_PAGES: PageNode[] = [
-  { id: "pg1", emoji: "📋", title: "SOP - Proceso de Campañas", content: "", parentId: null, isPrivate: false, order: 0, blocks: [
-    b("b1a", "h2", "1. Brief"), b("b1b", "text", "Recibir brief del cliente con objetivos, presupuesto y timeline."),
-    b("b1c", "h2", "2. Research"), b("b1d", "text", "Analizar competencia, audiencias y tendencias."),
-    b("b1e", "h2", "3. Estrategia"), b("b1f", "text", "Definir canales, segmentación y creativos."),
-    b("b1g", "h2", "4. Ejecución"), b("b1h", "text", "Crear campañas en plataforma, subir creativos."),
-    b("b1i", "h2", "5. Optimización"), b("b1j", "text", "Monitorear métricas diariamente, ajustar pujas y audiencias."),
-    b("b1k", "callout", "Siempre documentar los resultados de cada fase antes de avanzar.", { emoji: "💡", color: "blue" }),
-  ]},
-  { id: "pg2", emoji: "📊", title: "Brief Campaña Día de la Madre", content: "", parentId: null, isPrivate: false, order: 1, blocks: [
-    b("b2a", "callout", "Cliente: Tendearte | Presupuesto: $2,000 USD | Duración: 15 días", { emoji: "📌", color: "yellow" }),
-    b("b2b", "h2", "Objetivos"), b("b2c", "bullet-list", "Incrementar ventas 30%"), b("b2d", "bullet-list", "ROAS mínimo 3.5x"),
-    b("b2e", "h2", "Audiencia"), b("b2f", "bullet-list", "Mujeres 25-45 años"), b("b2g", "bullet-list", "Intereses: regalos, decoración"),
-    b("b2h", "h2", "Creativos necesarios"), b("b2i", "todo", "3 videos cortos (15s)", { checked: true }), b("b2j", "todo", "5 imágenes carrusel", { checked: false }), b("b2k", "todo", "2 stories", { checked: false }),
-    b("b2l", "divider", ""),
-    b("b2m", "quote", "El deadline es el 10 de mayo. No hay margen de error."),
-  ]},
-  { id: "pg3", emoji: "💡", title: "Ideas de Contenido", content: "", parentId: null, isPrivate: false, order: 2, blocks: [
-    b("b3a", "bullet-list", "Behind the scenes de sesiones de fotos"), b("b3b", "bullet-list", "Testimonios de clientes reales"),
-    b("b3c", "bullet-list", "Tutoriales de uso del producto"), b("b3d", "bullet-list", "Trends de TikTok adaptados"),
-  ]},
-  { id: "pg4", emoji: "🎬", title: "Videos TikTok", content: "", parentId: "pg3", isPrivate: false, order: 0, blocks: [
-    b("b4a", "numbered-list", "Unboxing con reacción"), b("b4b", "numbered-list", "POV: cuando llega tu pedido"),
-    b("b4c", "numbered-list", "Trend del momento con producto"), b("b4d", "numbered-list", "Comparación antes/después"),
-  ]},
-  { id: "pg5", emoji: "📝", title: "Notas personales", content: "", parentId: null, isPrivate: true, order: 0, blocks: [
-    b("b5a", "todo", "Revisar métricas de FloraCare el lunes", { checked: false }),
-    b("b5b", "todo", "Llamar a proveedor de creativos", { checked: true }),
-    b("b5c", "todo", "Preparar reporte mensual", { checked: false }),
-  ]},
-];
+// ── Transform API page to frontend PageNode ──
 
-const MOCK_WORKSPACES: Workspace[] = [
-  { id: "ws1", name: "REDKING Marketing", emoji: "🚀" },
-  { id: "ws2", name: "Talkyria", emoji: "💬" },
-  { id: "ws3", name: "Personal", emoji: "👤" },
-];
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function transformApiPage(apiPage: any): PageNode {
+  return {
+    id: apiPage.id,
+    emoji: apiPage.emoji || "📄",
+    title: apiPage.title || "Sin título",
+    content: "",
+    blocks: (apiPage.blocks || []).map((blk: { id: string; type: string; content: string; properties?: Record<string, unknown> }, i: number) => {
+      const props = blk.properties || {};
+      return {
+        id: blk.id,
+        type: (blk.type || "text") as BlockType,
+        content: blk.content || "",
+        checked: props.checked as boolean | undefined,
+        expanded: props.expanded as boolean | undefined,
+        language: props.language as string | undefined,
+        emoji: props.emoji as string | undefined,
+        color: props.color as string | undefined,
+        url: props.url as string | undefined,
+        fileName: props.fileName as string | undefined,
+        fileSize: props.fileSize as string | undefined,
+        tableData: props.tableData as string[][] | undefined,
+        toggleContent: props.toggleContent as string | undefined,
+        columnContents: props.columnContents as string[] | undefined,
+      };
+    }),
+    parentId: apiPage.parentId || null,
+    isPrivate: apiPage.isPrivate || false,
+    order: apiPage.position ?? 0,
+    coverImage: apiPage.coverImage || null,
+  };
+}
+
+// ── API helpers ──
+
+function apiUpdatePage(pageId: string, data: Record<string, unknown>) {
+  fetch(`/api/pages/${pageId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  }).catch((e) => console.error("API update page error:", e));
+}
+
+function apiDeletePage(pageId: string) {
+  fetch(`/api/pages/${pageId}`, { method: "DELETE" }).catch((e) => console.error("API delete page error:", e));
+}
 
 export const useSidebarStore = create<SidebarState>()(persist((set, get) => ({
   collapsed: false,
-  activeWorkspaceId: "ws1",
-  workspaces: MOCK_WORKSPACES,
-  pages: MOCK_PAGES.map((p) => ({ ...p })),
-  recents: [
-    { type: "task" as const, id: "t4", title: "Copies A/B WildropShop", emoji: "📝" },
-    { type: "board" as const, id: "b1", title: "Campañas Facebook", emoji: "📣" },
-    { type: "task" as const, id: "t1", title: "Campaña Conversión MedSock", emoji: "📝" },
-  ],
+  activeWorkspaceId: "",
+  workspaces: [],
+  pages: [],
+  recents: [],
   expandedBoardIds: [],
-  expandedPageIds: ["pg3"],
+  expandedPageIds: [],
   sectionsCollapsed: {},
   activePageId: null,
   mainView: "board",
   favorites: [],
+  _pagesLoaded: false,
+
+  // ── Load pages from server ──
+  loadPagesFromServer: async (workspaceId: string) => {
+    try {
+      const res = await fetch(`/api/pages?workspaceId=${workspaceId}`);
+      if (!res.ok) return;
+      const apiPages = await res.json();
+      const pages = apiPages.map(transformApiPage);
+      set({ pages, _pagesLoaded: true });
+    } catch (e) {
+      console.error("Error loading pages:", e);
+    }
+  },
+
+  // ── Load workspace info from server ──
+  loadWorkspacesFromServer: async (workspaceId: string) => {
+    try {
+      const res = await fetch(`/api/workspace?workspaceId=${workspaceId}`);
+      if (!res.ok) return;
+      const ws = await res.json();
+      set({
+        workspaces: [{ id: ws.id, name: ws.name, emoji: ws.emoji }],
+        activeWorkspaceId: ws.id,
+      });
+    } catch (e) {
+      console.error("Error loading workspaces:", e);
+    }
+  },
 
   toggleCollapsed: () => set((s) => ({ collapsed: !s.collapsed })),
   setActiveWorkspace: (id) => set({ activeWorkspaceId: id }),
@@ -204,12 +243,58 @@ export const useSidebarStore = create<SidebarState>()(persist((set, get) => ({
       activePageId: id,
       mainView: "page" as const,
     }));
+    // Create on server
+    const authData = JSON.parse(localStorage.getItem("mh-auth-storage") || "{}");
+    const workspaceId = authData?.state?.currentUser?.workspaceId;
+    if (workspaceId) {
+      fetch("/api/pages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceId, parentId, isPrivate }),
+      }).then((r) => r.json()).then((saved) => {
+        const serverPage = transformApiPage(saved);
+        set((s) => ({
+          pages: s.pages.map((p) => p.id === id ? serverPage : p),
+          activePageId: s.activePageId === id ? saved.id : s.activePageId,
+        }));
+      }).catch((e) => console.error("API create page error:", e));
+    }
     return id;
   },
 
-  updatePage: (id, updates) => set((s) => ({
-    pages: s.pages.map((p) => p.id === id ? { ...p, ...updates } : p),
-  })),
+  updatePage: (id, updates) => {
+    set((s) => ({
+      pages: s.pages.map((p) => p.id === id ? { ...p, ...updates } : p),
+    }));
+    // Persist to server
+    const serverData: Record<string, unknown> = {};
+    if (updates.title !== undefined) serverData.title = updates.title;
+    if (updates.emoji !== undefined) serverData.emoji = updates.emoji;
+    if (updates.coverImage !== undefined) serverData.coverImage = updates.coverImage;
+    if (updates.isPrivate !== undefined) serverData.isPrivate = updates.isPrivate;
+    if (updates.blocks !== undefined) {
+      serverData.blocks = updates.blocks.map((blk) => ({
+        type: blk.type,
+        content: blk.content,
+        properties: {
+          ...(blk.checked !== undefined && { checked: blk.checked }),
+          ...(blk.expanded !== undefined && { expanded: blk.expanded }),
+          ...(blk.language && { language: blk.language }),
+          ...(blk.emoji && { emoji: blk.emoji }),
+          ...(blk.color && { color: blk.color }),
+          ...(blk.url && { url: blk.url }),
+          ...(blk.fileName && { fileName: blk.fileName }),
+          ...(blk.fileSize && { fileSize: blk.fileSize }),
+          ...(blk.tableData && { tableData: blk.tableData }),
+          ...(blk.toggleContent && { toggleContent: blk.toggleContent }),
+          ...(blk.columnContents && { columnContents: blk.columnContents }),
+        },
+      }));
+    }
+    if (Object.keys(serverData).length > 0) {
+      apiUpdatePage(id, serverData);
+    }
+  },
 
   removePage: (id) => set((s) => {
     // Collect all descendant IDs recursively
@@ -224,6 +309,8 @@ export const useSidebarStore = create<SidebarState>()(persist((set, get) => ({
         }
       }
     }
+    // Delete each on server
+    toRemove.forEach((pid) => apiDeletePage(pid));
     return {
       pages: s.pages.filter((p) => !toRemove.has(p.id)),
       activePageId: toRemove.has(s.activePageId ?? "") ? null : s.activePageId,
@@ -306,9 +393,12 @@ export const useSidebarStore = create<SidebarState>()(persist((set, get) => ({
     }),
   })),
 
-  movePage: (id, newParentId, isPrivate) => set((s) => ({
-    pages: s.pages.map((p) => p.id === id ? { ...p, parentId: newParentId, isPrivate } : p),
-  })),
+  movePage: (id, newParentId, isPrivate) => {
+    set((s) => ({
+      pages: s.pages.map((p) => p.id === id ? { ...p, parentId: newParentId, isPrivate } : p),
+    }));
+    apiUpdatePage(id, { parentId: newParentId, isPrivate });
+  },
 
   addWorkspace: (name, emoji) => set((s) => ({
     workspaces: [...s.workspaces, { id: `ws_${Date.now()}`, name, emoji }],
@@ -329,9 +419,7 @@ export const useSidebarStore = create<SidebarState>()(persist((set, get) => ({
 
   inviteOpen: false,
   setInviteOpen: (open) => set({ inviteOpen: open }),
-  pendingInvites: [
-    { email: "maria@redking.co", role: "Editor" },
-  ],
+  pendingInvites: [],
   addInvite: (email, role) => set((s) => ({
     pendingInvites: [...s.pendingInvites, { email, role }],
   })),
@@ -354,6 +442,8 @@ export const useSidebarStore = create<SidebarState>()(persist((set, get) => ({
     let changed = true;
     while (changed) { changed = false; for (const p of s.pages) { if (p.parentId && toRemove.has(p.parentId) && !toRemove.has(p.id)) { toRemove.add(p.id); changed = true; } } }
     const removedPages = s.pages.filter((p) => toRemove.has(p.id));
+    // Soft delete on server
+    toRemove.forEach((pid) => apiDeletePage(pid));
     return {
       pages: s.pages.filter((p) => !toRemove.has(p.id)),
       trash: [...s.trash, { id, type: "page", name: page.title, data: removedPages, deletedAt: new Date().toISOString() }],
@@ -435,6 +525,33 @@ export const useSidebarStore = create<SidebarState>()(persist((set, get) => ({
       activePageId: id,
       mainView: "page" as const,
     }));
+    // Create on server
+    const authData = JSON.parse(localStorage.getItem("mh-auth-storage") || "{}");
+    const workspaceId = authData?.state?.currentUser?.workspaceId;
+    if (workspaceId) {
+      fetch("/api/pages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: tmpl.name, emoji: tmpl.emoji, workspaceId, parentId, isPrivate }),
+      }).then((r) => r.json()).then((saved) => {
+        // Update page blocks on server
+        apiUpdatePage(saved.id, {
+          blocks: blocks.map((blk) => ({
+            type: blk.type,
+            content: blk.content,
+            properties: {
+              ...(blk.checked !== undefined && { checked: blk.checked }),
+              ...(blk.emoji && { emoji: blk.emoji }),
+              ...(blk.color && { color: blk.color }),
+            },
+          })),
+        });
+        set((s) => ({
+          pages: s.pages.map((p) => p.id === id ? { ...p, id: saved.id } : p),
+          activePageId: s.activePageId === id ? saved.id : s.activePageId,
+        }));
+      }).catch((e) => console.error("API create page from template error:", e));
+    }
     return id;
   },
 
@@ -473,16 +590,25 @@ export const useSidebarStore = create<SidebarState>()(persist((set, get) => ({
 
 }), {
   name: "mh-sidebar-storage",
-  version: 1,
+  version: 3,
   partialize: (state) => ({
-    pages: state.pages,
-    workspaces: state.workspaces,
     favorites: state.favorites,
     recents: state.recents,
-    trash: state.trash,
-    pendingInvites: state.pendingInvites,
     expandedBoardIds: state.expandedBoardIds,
     expandedPageIds: state.expandedPageIds,
     sectionsCollapsed: state.sectionsCollapsed,
+    pendingInvites: state.pendingInvites,
   }),
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  migrate: (persisted: any) => {
+    // Wipe pages/workspaces that may have leaked from old versions
+    if (persisted && typeof persisted === "object") {
+      delete persisted.pages;
+      delete persisted.workspaces;
+      delete persisted.activeWorkspaceId;
+      delete persisted.trash;
+      delete persisted._pagesLoaded;
+    }
+    return persisted;
+  },
 }));

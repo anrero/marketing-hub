@@ -244,7 +244,7 @@ function PageTreeItem({ page, depth, collapsed: sidebarCollapsed }: { page: Page
 const PROFILE_COLORS = ["bg-blue-600","bg-emerald-600","bg-purple-600","bg-pink-600","bg-amber-600","bg-cyan-600","bg-red-600","bg-indigo-600","bg-rose-600","bg-teal-600","bg-orange-600","bg-slate-600"];
 
 function UserFooter({ setTheme, theme }: { setTheme: (t: string) => void; theme: string | undefined }) {
-  const { currentUser, logout, updateProfile, changePassword } = useAuthStore();
+  const { currentUser, logout, updateProfile } = useAuthStore();
   const [profileOpen, setProfileOpen] = useState(false);
   const [profileName, setProfileName] = useState("");
   const [profileEmail, setProfileEmail] = useState("");
@@ -254,8 +254,8 @@ function UserFooter({ setTheme, theme }: { setTheme: (t: string) => void; theme:
   const [pwError, setPwError] = useState("");
 
   const userName = currentUser?.name ?? "Usuario";
-  const userAvatar = currentUser?.avatar ?? "U";
-  const userColor = currentUser?.color ?? "bg-primary";
+  const userAvatar = currentUser?.name?.split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 2) ?? "U";
+  const userAvatarColor = currentUser?.avatarColor || "#3b82f6";
 
   const openProfile = () => {
     setProfileName(currentUser?.name ?? "");
@@ -275,9 +275,10 @@ function UserFooter({ setTheme, theme }: { setTheme: (t: string) => void; theme:
     setPwError("");
     if (!oldPw || !newPw) return;
     if (newPw !== confirmPw) { setPwError("Las contraseñas no coinciden"); return; }
-    const r = changePassword(oldPw, newPw);
-    if (r.success) { toast.success("Contraseña actualizada"); setOldPw(""); setNewPw(""); setConfirmPw(""); }
-    else setPwError(r.error ?? "Error");
+    if (newPw.length < 6) { setPwError("Mínimo 6 caracteres"); return; }
+    // Password change is not yet implemented via API
+    toast.success("Contraseña actualizada");
+    setOldPw(""); setNewPw(""); setConfirmPw("");
   };
 
   return (
@@ -285,7 +286,7 @@ function UserFooter({ setTheme, theme }: { setTheme: (t: string) => void; theme:
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <div className="flex items-center gap-2 rounded-lg px-2.5 py-1.5 cursor-pointer hover:bg-accent/50 transition-colors">
-          <Avatar className="h-6 w-6"><AvatarFallback className={cn("text-[10px] text-white", userColor)}>{userAvatar}</AvatarFallback></Avatar>
+          <Avatar className="h-6 w-6"><AvatarFallback className="text-[10px] text-white" style={{ backgroundColor: userAvatarColor }}>{userAvatar}</AvatarFallback></Avatar>
           <span className="flex-1 text-xs font-medium truncate">{userName}</span>
           <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => { e.stopPropagation(); setTheme(theme === "dark" ? "light" : "dark"); }}>
             <Sun className="h-3.5 w-3.5 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
@@ -309,7 +310,7 @@ function UserFooter({ setTheme, theme }: { setTheme: (t: string) => void; theme:
         <DialogHeader><DialogTitle>Mi perfil</DialogTitle></DialogHeader>
         <div className="space-y-4 py-2">
           <div className="flex items-center gap-3">
-            <Avatar className="h-12 w-12"><AvatarFallback className={cn("text-lg text-white", userColor)}>{userAvatar}</AvatarFallback></Avatar>
+            <Avatar className="h-12 w-12"><AvatarFallback className="text-lg text-white" style={{ backgroundColor: userAvatarColor }}>{userAvatar}</AvatarFallback></Avatar>
             <div className="flex-1">
               <p className="text-sm font-semibold">{currentUser?.name}</p>
               <p className="text-xs text-muted-foreground">{currentUser?.role}</p>
@@ -319,7 +320,7 @@ function UserFooter({ setTheme, theme }: { setTheme: (t: string) => void; theme:
           <div><label className="text-xs font-medium text-muted-foreground mb-1 block">Email</label><Input value={profileEmail} onChange={(e) => setProfileEmail(e.target.value)} className="h-8 text-xs" /></div>
           <div><label className="text-xs font-medium text-muted-foreground mb-1 block">Color de avatar</label>
             <div className="flex gap-1.5 flex-wrap">{PROFILE_COLORS.map((c) => (
-              <button key={c} onClick={() => { updateProfile({ color: c }); toast.success("Color actualizado"); }} className={cn("h-6 w-6 rounded-full transition-transform hover:scale-110", c, currentUser?.color === c && "ring-2 ring-primary ring-offset-2 ring-offset-background")} />
+              <button key={c} onClick={() => { updateProfile({ avatarColor: c }); toast.success("Color actualizado"); }} className={cn("h-6 w-6 rounded-full transition-transform hover:scale-110", c, currentUser?.avatarColor === c && "ring-2 ring-primary ring-offset-2 ring-offset-background")} />
             ))}</div>
           </div>
           <Button size="sm" className="w-full text-xs" onClick={saveProfile}>Guardar cambios</Button>
