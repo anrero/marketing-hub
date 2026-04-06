@@ -257,8 +257,9 @@ export function SettingsDialog() {
     setAddingMember(false);
   };
 
+  const serverMembers = useBoardStore((s) => s.serverTeamMembers);
   const isDefaultMember = (id: string) =>
-    TEAM_MEMBERS.some((m) => m.id === id);
+    serverMembers.some((m) => m.id === id) || TEAM_MEMBERS.some((m) => m.id === id);
 
   return (
     <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>

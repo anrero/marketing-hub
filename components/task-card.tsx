@@ -7,7 +7,6 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, ContextMenuSeparator } from "@/components/ui/context-menu";
 import { useBoardStore } from "@/stores/board-store";
-import { TEAM_MEMBERS } from "@/lib/mock-data";
 import type { Task, Priority } from "@/types";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -38,8 +37,8 @@ function isOverdue(dateStr: string) {
 
 export function TaskCard({ task }: { task: Task }) {
   const setSelectedTask = useBoardStore((s) => s.setSelectedTask);
-  const customTeamMembers = useBoardStore((s) => s.customTeamMembers);
-  const allMembers = [...TEAM_MEMBERS, ...customTeamMembers];
+  const getAllTeamMembers = useBoardStore((s) => s.getAllTeamMembers);
+  const allMembers = getAllTeamMembers();
   const assignee = allMembers.find((m) => m.id === task.assigneeId);
   const subs = task.subtasks ?? [];
   const subsDone = subs.filter((s) => s.completed).length;

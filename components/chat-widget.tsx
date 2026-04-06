@@ -6,7 +6,6 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useChatStore } from "@/stores/chat-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { useBoardStore } from "@/stores/board-store";
-import { TEAM_MEMBERS } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
 
 function timeLabel(ts: string): string {
@@ -43,15 +42,16 @@ export function ChatWidget() {
   const currentUser = useAuthStore((s) => s.currentUser);
   const allChatMessages = useChatStore((s) => s.messages);
   const sendMessage = useChatStore((s) => s.sendMessage);
+  const loadMessages = useChatStore((s) => s.loadMessages);
   const markAsRead = useChatStore((s) => s.markAsRead);
   const activeBoardId = useBoardStore((s) => s.activeBoardId);
   const boards = useBoardStore((s) => s.boards);
-  const customTeamMembers = useBoardStore((s) => s.customTeamMembers);
+  const getAllTeamMembers = useBoardStore((s) => s.getAllTeamMembers);
   const activeBoard = boards.find((b) => b.id === activeBoardId);
 
-  const allMembers = useMemo(() => [...TEAM_MEMBERS, ...customTeamMembers], [customTeamMembers]);
+  const allMembers = useMemo(() => getAllTeamMembers(), [getAllTeamMembers]);
 
-  const userId = currentUser?.id ?? "u1";
+  const userId = currentUser?.id ?? "";
   const userName = currentUser?.name ?? "Usuario";
 
   const totalUnread = useMemo(() => allChatMessages.filter((m) => !m.read && m.senderId !== userId).length, [allChatMessages, userId]);
@@ -72,6 +72,21 @@ export function ChatWidget() {
     }
     return msgs;
   }, [tab, channelId, directTarget, userId, allChatMessages]);
+
+  // Load messages from server when chat opens or channel changes
+  useEffect(() => {
+    if (!open || !channelId) return;
+    loadMessages(tab, channelId, userId);
+  }, [open, tab, channelId, userId, loadMessages]);
+
+  // Poll for new messages every 5 seconds while chat is open
+  useEffect(() => {
+    if (!open || !channelId) return;
+    const interval = setInterval(() => {
+      loadMessages(tab, channelId, userId);
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [open, tab, channelId, userId, loadMessages]);
 
   // Auto-scroll on new message
   const msgCount = messages.length;

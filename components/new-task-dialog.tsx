@@ -18,19 +18,22 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useBoardStore } from "@/stores/board-store";
+import { useAuthStore } from "@/stores/auth-store";
 import { COLUMNS, PRIORITIES } from "@/lib/mock-data";
 import type { Task, Status, Store, Priority } from "@/types";
 import { toast } from "sonner";
 
 export function NewTaskDialog() {
   const { newTaskDialogOpen, setNewTaskDialogOpen, addTask, getAllStores, getAllTeamMembers, taskTemplates, addTaskFromTemplate } = useBoardStore();
+  const currentUser = useAuthStore((s) => s.currentUser);
   const allStores = getAllStores();
   const allMembers = getAllTeamMembers();
+  const defaultAssignee = currentUser?.id || allMembers[0]?.id || "";
   const [title, setTitle] = useState("");
   const [status, setStatus] = useState<Status>("por_hacer");
   const [priority, setPriority] = useState<Priority>("media");
   const [store, setStore] = useState<Store>("MedSock");
-  const [assigneeId, setAssigneeId] = useState("u1");
+  const [assigneeId, setAssigneeId] = useState(defaultAssignee);
 
   const handleCreate = () => {
     if (!title.trim()) return;
@@ -62,7 +65,7 @@ export function NewTaskDialog() {
     setStatus("por_hacer");
     setPriority("media");
     setStore("MedSock");
-    setAssigneeId("u1");
+    setAssigneeId(defaultAssignee);
     setNewTaskDialogOpen(false);
     toast.success("Tarea creada");
   };

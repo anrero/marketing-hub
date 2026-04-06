@@ -15,7 +15,7 @@ function getSidebarStore() {
 const BUILT_IN_VIEWS: SavedView[] = [
   { id: "v_all", name: "Todas las tareas", icon: "star", builtIn: true, filters: {} },
   { id: "v_status", name: "Por estado", icon: "chart", builtIn: true, filters: { groupByStatus: true } },
-  { id: "v_mine", name: "Mis tareas", icon: "user", builtIn: true, filters: { assigneeId: "u1" } },
+  { id: "v_mine", name: "Mis tareas", icon: "user", builtIn: true, filters: { assigneeId: "__CURRENT_USER__" } },
   { id: "v_urgent", name: "Urgentes", icon: "alert", builtIn: true, filters: { priorities: ["urgente", "alta"] } },
   { id: "v_overdue", name: "Vencidas", icon: "calendar", builtIn: true, filters: { overdue: true } },
   { id: "v_archived", name: "Archivadas", icon: "archive", builtIn: true, filters: {} },
@@ -50,6 +50,7 @@ interface BoardState {
   activeViewId: string;
   customViews: SavedView[];
   tags: Tag[];
+  serverTeamMembers: TeamMember[];
   _serverLoaded: boolean;
 
   loadFromServer: (workspaceId: string) => Promise<boolean>;
@@ -182,6 +183,15 @@ function buildActivityEntries(task: Task, updates: Partial<Task>, authorId: stri
   return entries;
 }
 
+// ── Get current user ID from auth store ──
+
+function getCurrentUserId(): string {
+  try {
+    const authData = JSON.parse(localStorage.getItem("mh-auth-storage") || "{}");
+    return authData?.state?.currentUser?.id || "";
+  } catch { return ""; }
+}
+
 // ── API helpers (fire-and-forget with error logging) ──
 
 function apiPatchTask(taskId: string, data: Record<string, unknown>) {
@@ -305,6 +315,7 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
   customCampaignTypes: [],
   customAdAccounts: [],
   customTeamMembers: [],
+  serverTeamMembers: [],
   savedViews: BUILT_IN_VIEWS,
   activeViewId: "v_all",
   customViews: [],
@@ -313,22 +324,38 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
   // ── Load all boards + tasks from server ──
   loadFromServer: async (workspaceId: string) => {
     try {
-      // 1. Fetch boards
-      const boardsRes = await fetch(`/api/boards?workspaceId=${workspaceId}`);
+      // 1. Fetch boards + workspace members in parallel
+      const [boardsRes, wsRes] = await Promise.all([
+        fetch(`/api/boards?workspaceId=${workspaceId}`),
+        fetch(`/api/workspace?workspaceId=${workspaceId}`),
+      ]);
       if (!boardsRes.ok) {
         console.error("Failed to load boards:", boardsRes.status, await boardsRes.text().catch(() => ""));
         return false;
       }
       const apiBoards = await boardsRes.json();
 
-      // 2. Fetch tasks for each board in parallel
+      // 2. Parse workspace members
+      let serverMembers: TeamMember[] = [];
+      if (wsRes.ok) {
+        const wsData = await wsRes.json();
+        serverMembers = (wsData.members || []).map((m: { id: string; name: string; avatarColor?: string; role?: string }) => ({
+          id: m.id,
+          name: m.name,
+          avatar: m.name.split(" ").map((w: string) => w[0]).join("").toUpperCase().slice(0, 2),
+          role: m.role || "editor",
+          color: m.avatarColor,
+        }));
+      }
+
+      // 3. Fetch tasks for each board in parallel
       const taskResults = await Promise.all(
         apiBoards.map((b: { id: string }) =>
           fetch(`/api/tasks?boardId=${b.id}`).then((r) => r.ok ? r.json() : [])
         )
       );
 
-      // 3. Transform and collect
+      // 4. Transform and collect
       const allTasks: Task[] = [];
       const boards: Board[] = [];
       for (let i = 0; i < apiBoards.length; i++) {
@@ -343,6 +370,7 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
       set({
         boards,
         tasks: allTasks,
+        serverTeamMembers: serverMembers,
         activeBoardId: state.activeBoardId && boards.some((b) => b.id === state.activeBoardId)
           ? state.activeBoardId
           : boards[0]?.id || "",
@@ -410,7 +438,7 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     set((s) => ({
       tasks: s.tasks.map((t) =>
         t.id === taskId ? { ...t, status: newStatus, activity: [...t.activity, {
-          id: `a${Date.now()}_move`, authorId: "u1",
+          id: `a${Date.now()}_move`, authorId: getCurrentUserId(),
           action: `movió de "${statusLabels[oldStatus]}" a "${statusLabels[newStatus]}"`,
           field: "status", oldValue: statusLabels[oldStatus], newValue: statusLabels[newStatus],
           createdAt: new Date().toISOString(),
@@ -423,7 +451,7 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     apiPatchTask(taskId, { status: newStatus });
   },
 
-  updateTaskWithActivity: (taskId, updates, authorId = "u1") => {
+  updateTaskWithActivity: (taskId, updates, authorId = getCurrentUserId()) => {
     set((state) => {
       const task = state.tasks.find((t) => t.id === taskId);
       if (!task) return state;
@@ -497,10 +525,10 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
   addQuickTask: (title) => {
     const newId = `t${Date.now()}`;
     const newTask: Task = {
-      id: newId, title, status: "por_hacer", priority: "media", store: "", assigneeId: "u1",
+      id: newId, title, status: "por_hacer", priority: "media", store: "", assigneeId: getCurrentUserId(),
       campaignType: "", campaignName: "", adAccount: "", dueDate: new Date().toISOString().split("T")[0],
       urls: [], attachments: [], comments: [], activity: [
-        { id: `a${Date.now()}_create`, authorId: "u1", action: "creó la tarea", createdAt: new Date().toISOString() }
+        { id: `a${Date.now()}_create`, authorId: getCurrentUserId(), action: "creó la tarea", createdAt: new Date().toISOString() }
       ], subtasks: [],
     };
     set((state) => ({
@@ -569,23 +597,50 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     apiDeleteBoard(id);
   },
 
-  duplicateBoard: (id) =>
-    set((state) => {
-      const board = state.boards.find((b) => b.id === id);
-      if (!board) return state;
-      const newId = `b${Date.now()}`;
-      const newTaskIds: string[] = [];
-      const newTasks: Task[] = [];
-      for (const tid of board.taskIds) {
-        const task = state.tasks.find((t) => t.id === tid);
-        if (task) {
-          const ntid = `t${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-          newTaskIds.push(ntid);
-          newTasks.push({ ...task, id: ntid, title: task.title, comments: [], activity: [{ id: `a${Date.now()}`, authorId: "u1", action: "duplicó la tarea", createdAt: new Date().toISOString() }] });
-        }
+  duplicateBoard: (id) => {
+    const state = get();
+    const board = state.boards.find((b) => b.id === id);
+    if (!board) return;
+    const newBoardId = `b${Date.now()}`;
+    const newTaskIds: string[] = [];
+    const newTasks: Task[] = [];
+    for (const tid of board.taskIds) {
+      const task = state.tasks.find((t) => t.id === tid);
+      if (task) {
+        const ntid = `t${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+        newTaskIds.push(ntid);
+        newTasks.push({ ...task, id: ntid, title: task.title, comments: [], activity: [{ id: `a${Date.now()}`, authorId: getCurrentUserId(), action: "duplicó la tarea", createdAt: new Date().toISOString() }] });
       }
-      return { boards: [...state.boards, { ...board, id: newId, name: `${board.name} (copia)`, taskIds: newTaskIds }], tasks: [...state.tasks, ...newTasks], activeBoardId: newId };
-    }),
+    }
+    set((s) => ({
+      boards: [...s.boards, { ...board, id: newBoardId, name: `${board.name} (copia)`, taskIds: newTaskIds }],
+      tasks: [...s.tasks, ...newTasks],
+      activeBoardId: newBoardId,
+    }));
+    // Persist: create board on server, then create tasks
+    const authData = JSON.parse(localStorage.getItem("mh-auth-storage") || "{}");
+    const workspaceId = authData?.state?.currentUser?.workspaceId;
+    if (workspaceId) {
+      fetch("/api/boards", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: `${board.name} (copia)`, workspaceId }),
+      }).then((r) => r.json()).then((savedBoard) => {
+        set((s) => ({
+          boards: s.boards.map((b) => b.id === newBoardId ? { ...b, id: savedBoard.id } : b),
+          activeBoardId: s.activeBoardId === newBoardId ? savedBoard.id : s.activeBoardId,
+        }));
+        // Create tasks for the new board
+        for (const nt of newTasks) {
+          fetch("/api/tasks", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ boardId: savedBoard.id, title: nt.title, status: nt.status, priority: nt.priority, store: nt.store || undefined, assigneeId: nt.assigneeId || undefined }),
+          }).catch((e) => console.error("API duplicate board task error:", e));
+        }
+      }).catch((e) => console.error("API duplicate board error:", e));
+    }
+  },
 
   removeAttachment: (taskId, index) =>
     set((state) => ({ tasks: state.tasks.map((t) => t.id === taskId ? { ...t, attachments: t.attachments.filter((_, i) => i !== index) } : t) })),
@@ -644,14 +699,34 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
   removeTeamMember: (memberId) => set((s) => ({ customTeamMembers: s.customTeamMembers.filter((m) => m.id !== memberId) })),
   updateTeamMember: (memberId, updates) => set((s) => ({ customTeamMembers: s.customTeamMembers.map((m) => m.id === memberId ? { ...m, ...updates } : m) })),
 
-  duplicateTask: (taskId) =>
-    set((state) => {
-      const task = state.tasks.find((t) => t.id === taskId);
-      if (!task) return state;
-      const newId = `t${Date.now()}`;
-      const newTask: Task = { ...task, id: newId, title: `${task.title} (copia)`, comments: [], subtasks: [...(task.subtasks ?? []).map((s) => ({ ...s, id: `st${Date.now()}_${Math.random().toString(36).slice(2, 6)}` }))], activity: [{ id: `a${Date.now()}_create`, authorId: "u1", action: "duplicó la tarea", createdAt: new Date().toISOString() }] };
-      return { tasks: [...state.tasks, newTask], boards: state.boards.map((b) => b.id === state.activeBoardId ? { ...b, taskIds: [...b.taskIds, newId] } : b) };
-    }),
+  duplicateTask: (taskId) => {
+    const state = get();
+    const task = state.tasks.find((t) => t.id === taskId);
+    if (!task) return;
+    const newId = `t${Date.now()}`;
+    const newTask: Task = { ...task, id: newId, title: `${task.title} (copia)`, comments: [], subtasks: [...(task.subtasks ?? []).map((s) => ({ ...s, id: `st${Date.now()}_${Math.random().toString(36).slice(2, 6)}` }))], activity: [{ id: `a${Date.now()}_create`, authorId: getCurrentUserId(), action: "duplicó la tarea", createdAt: new Date().toISOString() }] };
+    set((s) => ({ tasks: [...s.tasks, newTask], boards: s.boards.map((b) => b.id === s.activeBoardId ? { ...b, taskIds: [...b.taskIds, newId] } : b) }));
+    // Persist to server
+    fetch("/api/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        boardId: state.activeBoardId,
+        title: newTask.title,
+        status: newTask.status,
+        priority: newTask.priority,
+        store: newTask.store || undefined,
+        assigneeId: newTask.assigneeId || undefined,
+        campaignType: newTask.campaignType || undefined,
+        dueDate: newTask.dueDate || undefined,
+      }),
+    }).then((r) => r.json()).then((saved) => {
+      set((s) => ({
+        tasks: s.tasks.map((t) => t.id === newId ? { ...t, id: saved.id } : t),
+        boards: s.boards.map((b) => ({ ...b, taskIds: b.taskIds.map((id) => id === newId ? saved.id : id) })),
+      }));
+    }).catch((e) => console.error("API duplicate task error:", e));
+  },
 
   deleteTask: (taskId) => {
     const state = get();
@@ -717,7 +792,7 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
   // Bulk
   bulkMove: (taskIds, status) => {
     set((state) => ({
-      tasks: state.tasks.map((t) => taskIds.includes(t.id) ? { ...t, status, activity: [...t.activity, { id: `a${Date.now()}_bulk`, authorId: "u1", action: `movió a "${statusLabels[status]}"`, field: "status", newValue: statusLabels[status], createdAt: new Date().toISOString() }] } : t),
+      tasks: state.tasks.map((t) => taskIds.includes(t.id) ? { ...t, status, activity: [...t.activity, { id: `a${Date.now()}_bulk`, authorId: getCurrentUserId(), action: `movió a "${statusLabels[status]}"`, field: "status", newValue: statusLabels[status], createdAt: new Date().toISOString() }] } : t),
     }));
     taskIds.forEach((id) => apiPatchTask(id, { status }));
   },
@@ -726,14 +801,14 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     set((state) => {
       const allMembers = [...TEAM_MEMBERS, ...state.customTeamMembers];
       const name = allMembers.find((m) => m.id === assigneeId)?.name ?? assigneeId;
-      return { tasks: state.tasks.map((t) => taskIds.includes(t.id) ? { ...t, assigneeId, activity: [...t.activity, { id: `a${Date.now()}_bulk`, authorId: "u1", action: `asignó a "${name}"`, field: "assigneeId", newValue: name, createdAt: new Date().toISOString() }] } : t) };
+      return { tasks: state.tasks.map((t) => taskIds.includes(t.id) ? { ...t, assigneeId, activity: [...t.activity, { id: `a${Date.now()}_bulk`, authorId: getCurrentUserId(), action: `asignó a "${name}"`, field: "assigneeId", newValue: name, createdAt: new Date().toISOString() }] } : t) };
     });
     taskIds.forEach((id) => apiPatchTask(id, { assigneeId }));
   },
 
   bulkPriority: (taskIds, priority) => {
     set((state) => ({
-      tasks: state.tasks.map((t) => taskIds.includes(t.id) ? { ...t, priority, activity: [...t.activity, { id: `a${Date.now()}_bulk`, authorId: "u1", action: `cambió prioridad a "${priority}"`, field: "priority", newValue: priority, createdAt: new Date().toISOString() }] } : t),
+      tasks: state.tasks.map((t) => taskIds.includes(t.id) ? { ...t, priority, activity: [...t.activity, { id: `a${Date.now()}_bulk`, authorId: getCurrentUserId(), action: `cambió prioridad a "${priority}"`, field: "priority", newValue: priority, createdAt: new Date().toISOString() }] } : t),
     }));
     taskIds.forEach((id) => apiPatchTask(id, { priority }));
   },
@@ -764,19 +839,32 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     taskIds.forEach((id) => apiDeleteTask(id));
   },
 
-  bulkDuplicate: (taskIds) =>
-    set((state) => {
-      const newTasks: Task[] = [];
-      const newIds: string[] = [];
-      for (const id of taskIds) {
-        const task = state.tasks.find((t) => t.id === id);
-        if (!task) continue;
-        const newId = `t${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-        newTasks.push({ ...task, id: newId, title: `${task.title} (copia)`, comments: [], activity: [{ id: `a${Date.now()}_dup`, authorId: "u1", action: "duplicó la tarea", createdAt: new Date().toISOString() }] });
-        newIds.push(newId);
-      }
-      return { tasks: [...state.tasks, ...newTasks], boards: state.boards.map((b) => b.id === state.activeBoardId ? { ...b, taskIds: [...b.taskIds, ...newIds] } : b) };
-    }),
+  bulkDuplicate: (taskIds) => {
+    const state = get();
+    const newTasks: Task[] = [];
+    const newIds: string[] = [];
+    for (const id of taskIds) {
+      const task = state.tasks.find((t) => t.id === id);
+      if (!task) continue;
+      const newId = `t${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      newTasks.push({ ...task, id: newId, title: `${task.title} (copia)`, comments: [], activity: [{ id: `a${Date.now()}_dup`, authorId: getCurrentUserId(), action: "duplicó la tarea", createdAt: new Date().toISOString() }] });
+      newIds.push(newId);
+    }
+    set((s) => ({ tasks: [...s.tasks, ...newTasks], boards: s.boards.map((b) => b.id === s.activeBoardId ? { ...b, taskIds: [...b.taskIds, ...newIds] } : b) }));
+    // Persist each duplicated task
+    for (const nt of newTasks) {
+      fetch("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ boardId: state.activeBoardId, title: nt.title, status: nt.status, priority: nt.priority, store: nt.store || undefined, assigneeId: nt.assigneeId || undefined }),
+      }).then((r) => r.json()).then((saved) => {
+        set((s) => ({
+          tasks: s.tasks.map((t) => t.id === nt.id ? { ...t, id: saved.id } : t),
+          boards: s.boards.map((b) => ({ ...b, taskIds: b.taskIds.map((tid) => tid === nt.id ? saved.id : tid) })),
+        }));
+      }).catch((e) => console.error("API bulk duplicate error:", e));
+    }
+  },
 
   addCustomView: (name, filters) =>
     set((s) => ({ customViews: [...s.customViews, { id: `cv_${Date.now()}`, name, icon: "star", builtIn: false, filters }] })),
@@ -784,7 +872,7 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
   getAllStores: () => { const s = get(); return [...STORES, ...s.customStores]; },
   getAllCampaignTypes: () => { const s = get(); return [...CAMPAIGN_TYPES, ...s.customCampaignTypes]; },
   getAllAdAccounts: () => { const s = get(); return [...DEFAULT_AD_ACCOUNTS, ...s.customAdAccounts]; },
-  getAllTeamMembers: () => { const s = get(); return [...TEAM_MEMBERS, ...s.customTeamMembers]; },
+  getAllTeamMembers: () => { const s = get(); return s.serverTeamMembers.length > 0 ? [...s.serverTeamMembers, ...s.customTeamMembers] : [...TEAM_MEMBERS, ...s.customTeamMembers]; },
   getAllViews: () => { const s = get(); return [...s.savedViews, ...s.customViews]; },
 
   getFilteredTasks: () => {
@@ -796,7 +884,10 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     const allViews = [...state.savedViews, ...state.customViews];
     const view = allViews.find((v) => v.id === state.activeViewId);
     if (view?.filters) {
-      if (view.filters.assigneeId) result = result.filter((t) => t.assigneeId === view.filters.assigneeId);
+      if (view.filters.assigneeId) {
+        const filterAssignee = view.filters.assigneeId === "__CURRENT_USER__" ? getCurrentUserId() : view.filters.assigneeId;
+        result = result.filter((t) => t.assigneeId === filterAssignee);
+      }
       if (view.filters.priorities?.length) result = result.filter((t) => view.filters.priorities!.includes(t.priority));
       if (view.filters.overdue) { const today = new Date().toISOString().split("T")[0]; result = result.filter((t) => t.dueDate < today && t.status !== "completado"); }
     }
@@ -947,23 +1038,43 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
   ],
   addTaskTemplate: (t) => set((s) => ({ taskTemplates: [...s.taskTemplates, t] })),
   removeTaskTemplate: (id) => set((s) => ({ taskTemplates: s.taskTemplates.filter((t) => t.id !== id) })),
-  addTaskFromTemplate: (templateId, status) => set((s) => {
+  addTaskFromTemplate: (templateId, status) => {
+    const s = get();
     const tmpl = s.taskTemplates.find((t) => t.id === templateId);
-    if (!tmpl) return s;
+    if (!tmpl) return;
     const newId = `t${Date.now()}`;
     const newTask: Task = {
       id: newId, title: tmpl.title, status: status ?? "por_hacer", priority: tmpl.priority,
-      store: tmpl.store ?? "", assigneeId: "", campaignType: tmpl.campaignType ?? "",
+      store: tmpl.store ?? "", assigneeId: getCurrentUserId(), campaignType: tmpl.campaignType ?? "",
       campaignName: "", adAccount: "", dueDate: "", urls: [], attachments: [],
-      comments: [], activity: [{ id: `a${Date.now()}`, authorId: "u1", action: "creó tarea desde plantilla", createdAt: new Date().toISOString() }],
+      comments: [], activity: [{ id: `a${Date.now()}`, authorId: getCurrentUserId(), action: "creó tarea desde plantilla", createdAt: new Date().toISOString() }],
       subtasks: tmpl.subtasks.map((title, i) => ({ id: `sub_${Date.now()}_${i}`, title, completed: false })),
       tags: tmpl.tags ?? [],
     };
-    return {
-      tasks: [...s.tasks, newTask],
-      boards: s.boards.map((b) => b.id === s.activeBoardId ? { ...b, taskIds: [...b.taskIds, newId] } : b),
-    };
-  }),
+    set((st) => ({
+      tasks: [...st.tasks, newTask],
+      boards: st.boards.map((b) => b.id === st.activeBoardId ? { ...b, taskIds: [...b.taskIds, newId] } : b),
+    }));
+    // Persist to server
+    fetch("/api/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        boardId: s.activeBoardId,
+        title: newTask.title,
+        status: newTask.status,
+        priority: newTask.priority,
+        store: newTask.store || undefined,
+        assigneeId: newTask.assigneeId || undefined,
+        campaignType: newTask.campaignType || undefined,
+      }),
+    }).then((r) => r.json()).then((saved) => {
+      set((st) => ({
+        tasks: st.tasks.map((t) => t.id === newId ? { ...t, id: saved.id } : t),
+        boards: st.boards.map((b) => ({ ...b, taskIds: b.taskIds.map((id) => id === newId ? saved.id : id) })),
+      }));
+    }).catch((e) => console.error("API template task error:", e));
+  },
 }), {
   name: "mh-board-storage",
   version: 3,

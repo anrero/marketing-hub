@@ -26,7 +26,6 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useBoardStore } from "@/stores/board-store";
 import { useTableColumnsStore } from "@/stores/table-columns-store";
-import { TEAM_MEMBERS } from "@/lib/mock-data";
 import type { Task, Status, Priority, TableColumnDef, CustomColumnType } from "@/types";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -524,8 +523,8 @@ function CampaignTypeCell({ task, onUpdate, onAddType, allTypes, cellId, flashId
 // ── Assignee cell ───────────────────────────────────────────
 function AssigneeCell({ task, onUpdate, cellId, flashId }: { task: Task; onUpdate: (id: string) => void; cellId: string; flashId: string | null }) {
   const [open, setOpen] = useState(false);
-  const customTeamMembers = useBoardStore((s) => s.customTeamMembers);
-  const allMembers = useMemo(() => [...TEAM_MEMBERS, ...customTeamMembers], [customTeamMembers]);
+  const getAllTeamMembers = useBoardStore((s) => s.getAllTeamMembers);
+  const allMembers = useMemo(() => getAllTeamMembers(), [getAllTeamMembers]);
   const assignee = allMembers.find((m) => m.id === task.assigneeId);
   return (<Popover open={open} onOpenChange={setOpen}><PopoverTrigger asChild><button onClick={(e) => e.stopPropagation()} className={cn("flex items-center gap-1.5 rounded px-1 py-0.5 hover:bg-muted transition-all cursor-pointer max-w-full overflow-hidden", flashId === cellId && "ring-2 ring-blue-500/50 bg-blue-500/10")}><Avatar className="h-5 w-5 flex-shrink-0"><AvatarFallback className={cn("text-[8px]", assignee?.color ? `${assignee.color} text-white` : "bg-muted")}>{assignee?.avatar ?? "?"}</AvatarFallback></Avatar><span className="text-xs truncate">{assignee?.name}</span></button></PopoverTrigger>
     <PopoverContent className="w-[200px] p-1" align="start">{allMembers.map((m) => (<OptionItem key={m.id} selected={task.assigneeId === m.id} onClick={() => { onUpdate(m.id); setOpen(false); }}><span className="flex items-center gap-2"><Avatar className="h-5 w-5"><AvatarFallback className={cn("text-[8px]", m.color ? `${m.color} text-white` : "bg-muted")}>{m.avatar}</AvatarFallback></Avatar><span className="flex flex-col"><span>{m.name}</span><span className="text-[10px] text-muted-foreground">{m.role}</span></span></span></OptionItem>))}</PopoverContent></Popover>);
