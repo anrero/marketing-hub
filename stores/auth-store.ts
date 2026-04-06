@@ -87,7 +87,31 @@ export const useAuthStore = create<AuthState>()(persist((set, get) => ({
     }
   },
 
-  logout: () => set({ currentUser: null }),
+  logout: () => {
+    set({ currentUser: null });
+    // Clear all store data from localStorage to prevent stale data on next login
+    try {
+      localStorage.removeItem("mh-board-storage");
+      localStorage.removeItem("mh-sidebar-storage");
+      localStorage.removeItem("mh-table-columns-storage");
+    } catch { /* ignore */ }
+    // Reset board and sidebar stores in memory
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { useBoardStore } = require("@/stores/board-store");
+      useBoardStore.setState({ boards: [], tasks: [], activeBoardId: "", _serverLoaded: false, serverTeamMembers: [] });
+    } catch { /* ignore */ }
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { useSidebarStore } = require("@/stores/sidebar-store");
+      useSidebarStore.setState({ pages: [], workspaces: [], activeWorkspaceId: "", _pagesLoaded: false });
+    } catch { /* ignore */ }
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { useChatStore } = require("@/stores/chat-store");
+      useChatStore.setState({ messages: [], _loaded: {} });
+    } catch { /* ignore */ }
+  },
 
   checkSession: async () => {
     const state = get();

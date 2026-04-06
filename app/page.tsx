@@ -179,9 +179,9 @@ function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [dataLoading, setDataLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
-  const initialLoadDone = useRef(false);
+  const loadedForWorkspace = useRef<string | null>(null);
 
-  // Load workspace data on mount
+  // Load workspace data on mount or when workspace changes (new login)
   const loadAllData = async (wsId: string) => {
     setDataLoading(true);
     setLoadError(false);
@@ -195,8 +195,8 @@ function AppShell() {
   };
 
   useEffect(() => {
-    if (!workspaceId || initialLoadDone.current) return;
-    initialLoadDone.current = true;
+    if (!workspaceId || loadedForWorkspace.current === workspaceId) return;
+    loadedForWorkspace.current = workspaceId;
     loadAllData(workspaceId);
   }, [workspaceId, loadFromServer, loadPagesFromServer, loadWorkspacesFromServer]);
 
