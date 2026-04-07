@@ -7,19 +7,11 @@ export async function GET(request: Request) {
     const { user, error } = await getAuthUser(request);
     if (error) return error;
 
-    // Find workspaces owned by this user
-    const ownedWorkspaces = await prisma.workspace.findMany({
-      where: { ownerId: user!.id },
-      select: { id: true },
-    });
-    const ownedWorkspaceIds = ownedWorkspaces.map((w: { id: string }) => w.id);
-
-    // Owner sees ALL boards in their workspace(s)
-    // Everyone else sees only boards shared with them via BoardShare
+    // User sees boards they created OR boards shared with them
     const boards = await prisma.board.findMany({
       where: {
         OR: [
-          { workspaceId: { in: ownedWorkspaceIds } },
+          { createdById: user!.id },
           { shares: { some: { userId: user!.id } } },
         ],
       },
@@ -55,10 +47,11 @@ export async function POST(request: Request) {
 
     const count = await prisma.board.count({ where: { workspaceId } });
 
-    // Create board with default columns
+    // Create board — only the creator sees it until they share it
     const board = await prisma.board.create({
       data: {
         name, emoji: emoji || "📋", workspaceId, position: count,
+        createdById: user!.id,
         columns: {
           create: [
             { name: "Por hacer", color: "#6b7280", position: 0 },
@@ -70,14 +63,6 @@ export async function POST(request: Request) {
       },
       include: { columns: { orderBy: { position: "asc" } } },
     });
-
-    // Auto-create BoardShare for the creator if they're not the workspace owner
-    const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { ownerId: true } });
-    if (workspace?.ownerId !== user!.id) {
-      await prisma.boardShare.create({
-        data: { boardId: board.id, userId: user!.id, role: "editor", sharedBy: user!.id },
-      });
-    }
 
     return NextResponse.json(board);
   } catch (e) {

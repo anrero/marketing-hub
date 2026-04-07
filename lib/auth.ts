@@ -36,16 +36,15 @@ export async function getAuthUser(request: Request) {
 
 /**
  * Check if a user has access to a board.
- * - Workspace owner: full access to all boards in their workspace
- * - Others: need a BoardShare record for the specific board
+ * Access is granted if the user is the board creator OR has a BoardShare.
+ * No workspace-owner privilege — everyone follows the same rules.
  */
 export async function checkBoardAccess(userId: string, boardId: string): Promise<{ hasAccess: boolean; role: string }> {
-  const board = await prisma.board.findUnique({ where: { id: boardId }, select: { workspaceId: true } });
+  const board = await prisma.board.findUnique({ where: { id: boardId }, select: { createdById: true } });
   if (!board) return { hasAccess: false, role: "" };
 
-  // Check if user is the workspace owner — full access
-  const workspace = await prisma.workspace.findUnique({ where: { id: board.workspaceId }, select: { ownerId: true } });
-  if (workspace?.ownerId === userId) return { hasAccess: true, role: "owner" };
+  // Creator has full access
+  if (board.createdById === userId) return { hasAccess: true, role: "owner" };
 
   // Check BoardShare
   const share = await prisma.boardShare.findUnique({
