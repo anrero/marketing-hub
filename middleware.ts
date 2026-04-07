@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
-import { verifySessionToken, SESSION_COOKIE_NAME } from "@/lib/session";
+
+const COOKIE_NAME = "mh-session";
 
 // API routes that don't require authentication
 const PUBLIC_API_ROUTES = [
@@ -18,24 +19,20 @@ export async function middleware(request: NextRequest) {
       return NextResponse.next();
     }
 
-    // Check for session cookie
-    const token = request.cookies.get(SESSION_COOKIE_NAME)?.value;
-    if (!token) {
-      // Also check x-user-id header for backwards compatibility
-      const headerUserId = request.headers.get("x-user-id");
-      if (!headerUserId) {
-        return NextResponse.json({ error: "No autenticado" }, { status: 401 });
-      }
+    // Check for session cookie (basic gate — full JWT verification happens in getAuthUser)
+    const token = request.cookies.get(COOKIE_NAME)?.value;
+    if (token) {
+      // Cookie present — let the request through; API route will verify signature
       return NextResponse.next();
     }
 
-    // Verify the token
-    const userId = verifySessionToken(token);
-    if (!userId) {
-      return NextResponse.json({ error: "Sesión inválida" }, { status: 401 });
+    // Fallback: check x-user-id header for backwards compatibility
+    const headerUserId = request.headers.get("x-user-id");
+    if (headerUserId) {
+      return NextResponse.next();
     }
 
-    return NextResponse.next();
+    return NextResponse.json({ error: "No autenticado" }, { status: 401 });
   }
 
   return NextResponse.next();
