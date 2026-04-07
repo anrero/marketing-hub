@@ -122,4 +122,5 @@ export interface Board {
   columns: Column[];
   taskIds: string[];
   workspaceId?: string;
+  shareCount?: number;
 }

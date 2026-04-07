@@ -323,6 +323,7 @@ function transformApiBoard(apiBoard: any, taskIds: string[]): Board {
     id: apiBoard.id,
     name: apiBoard.name,
     workspaceId: apiBoard.workspaceId,
+    shareCount: apiBoard._count?.shares ?? 0,
     columns: (apiBoard.columns || []).map((c: { id: string; name: string; color?: string }) => ({
       id: columnNameToStatusId(c.name),
       title: c.name,

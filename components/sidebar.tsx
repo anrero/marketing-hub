@@ -723,6 +723,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
                                 <button onClick={() => handleBoardClick(board.id)} onDoubleClick={(e) => { e.stopPropagation(); setRenamingBoard(board.id); setBoardName(board.name); }} className="flex flex-1 items-center gap-2 py-1.5 pr-1 min-w-0">
                                   {boardIcons[board.id] ?? <Kanban className="h-4 w-4 flex-shrink-0" />}
                                   <span className="text-sm truncate">{board.name}</span>
+                                  {(board.shareCount ?? 0) > 0 && <span className="text-[9px] text-muted-foreground/60 flex-shrink-0">{board.shareCount}</span>}
                                 </button>
                               )}
 

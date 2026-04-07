@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useBoardStore } from "@/stores/board-store";
+import { useAuthStore } from "@/stores/auth-store";
 import { PRIORITIES } from "@/lib/mock-data";
 import { toast } from "sonner";
 
@@ -58,6 +59,7 @@ export function BoardHeader() {
   const [shareRole, setShareRole] = useState("editor");
   const [shareList, setShareList] = useState<{ id: string; userId: string; role: string; user: { id: string; name: string; email: string; avatarColor?: string } }[]>([]);
   const [shareLoading, setShareLoading] = useState(false);
+  const [wsMembers, setWsMembers] = useState<{ id: string; name: string; email: string; avatarColor?: string }[]>([]);
 
   const loadShareList = async () => {
     if (!activeBoardId) return;
@@ -65,8 +67,20 @@ export function BoardHeader() {
       const res = await fetch(`/api/boards/${activeBoardId}/share`);
       if (res.ok) setShareList(await res.json());
     } catch { /* ignore */ }
+    // Load workspace members for quick-share
+    const board = boards.find((b) => b.id === activeBoardId);
+    if (board?.workspaceId) {
+      try {
+        const res = await fetch(`/api/workspace?workspaceId=${board.workspaceId}`);
+        if (res.ok) {
+          const ws = await res.json();
+          setWsMembers((ws.members || []).filter((m: { id: string }) => m.id !== currentUser?.id));
+        }
+      } catch { /* ignore */ }
+    }
   };
 
+  const currentUser = useAuthStore((s) => s.currentUser);
   useEffect(() => { if (shareOpen) loadShareList(); }, [shareOpen, activeBoardId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleShare = async () => {
@@ -314,9 +328,27 @@ export function BoardHeader() {
                 Invitar
               </Button>
             </div>
+            {/* Workspace members — quick share */}
+            {wsMembers.filter((m) => !shareList.some((s) => s.userId === m.id)).length > 0 && (
+              <div className="space-y-2">
+                <p className="text-xs font-medium text-muted-foreground">Miembros del workspace</p>
+                <div className="flex flex-wrap gap-1">
+                  {wsMembers.filter((m) => !shareList.some((s) => s.userId === m.id)).map((m) => (
+                    <button key={m.id} onClick={() => { setShareEmail(m.email); }}
+                      className="flex items-center gap-1.5 rounded-full border border-border px-2 py-1 text-[10px] hover:bg-accent transition-colors">
+                      <Avatar className="h-4 w-4">
+                        <AvatarFallback className="text-[8px]" style={{ backgroundColor: m.avatarColor }}>{m.name[0]}</AvatarFallback>
+                      </Avatar>
+                      {m.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="space-y-2">
               <p className="text-xs font-medium text-muted-foreground">Personas con acceso</p>
-              {shareList.length === 0 && <p className="text-xs text-muted-foreground py-2">Solo miembros del workspace tienen acceso</p>}
+              {shareList.length === 0 && <p className="text-xs text-muted-foreground py-2">Nadie tiene acceso aún. Comparte con el campo de arriba.</p>}
               {shareList.map((share) => (
                 <div key={share.id} className="flex items-center gap-2 py-1">
                   <Avatar className="h-7 w-7">

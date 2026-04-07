@@ -7,14 +7,26 @@ export async function GET(request: Request) {
     const { user, error } = await getAuthUser(request);
     if (error) return error;
 
+    // Find workspaces owned by this user
+    const ownedWorkspaces = await prisma.workspace.findMany({
+      where: { ownerId: user!.id },
+      select: { id: true },
+    });
+    const ownedWorkspaceIds = ownedWorkspaces.map((w: { id: string }) => w.id);
+
+    // Owner sees ALL boards in their workspace(s)
+    // Everyone else sees only boards shared with them via BoardShare
     const boards = await prisma.board.findMany({
       where: {
         OR: [
-          { workspace: { workspaceMembers: { some: { userId: user!.id } } } },
+          { workspaceId: { in: ownedWorkspaceIds } },
           { shares: { some: { userId: user!.id } } },
         ],
       },
-      include: { columns: { orderBy: { position: "asc" } } },
+      include: {
+        columns: { orderBy: { position: "asc" } },
+        _count: { select: { shares: true } },
+      },
       orderBy: { position: "asc" },
     });
 
@@ -43,6 +55,7 @@ export async function POST(request: Request) {
 
     const count = await prisma.board.count({ where: { workspaceId } });
 
+    // Create board — NOT shared with anyone by default (only owner sees it)
     const board = await prisma.board.create({
       data: {
         name, emoji: emoji || "📋", workspaceId, position: count,
