@@ -5,6 +5,18 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useBoardStore } from "@/stores/board-store";
 import { toast } from "sonner";
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
+import { useDroppable } from "@dnd-kit/core";
+import { useDraggable } from "@dnd-kit/core";
+import type { Task } from "@/types";
 
 const MONTH_NAMES = [
   "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
@@ -89,10 +101,60 @@ function buildCalendarGrid(year: number, month: number): CalendarDay[] {
   return days;
 }
 
+function DroppableDay({ dateStr, children, className }: { dateStr: string; children: React.ReactNode; className?: string }) {
+  const { setNodeRef, isOver } = useDroppable({ id: dateStr });
+  return (
+    <div ref={setNodeRef} className={cn(className, isOver && "ring-2 ring-primary/50")}>
+      {children}
+    </div>
+  );
+}
+
+function DraggableTaskPill({ task, children, className, ...props }: { task: Task; children: React.ReactNode } & React.HTMLAttributes<HTMLButtonElement>) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: task.id });
+  return (
+    <button
+      ref={setNodeRef}
+      {...listeners}
+      {...attributes}
+      className={className}
+      style={{ opacity: isDragging ? 0.3 : 1 }}
+      {...props}
+    >
+      {children}
+    </button>
+  );
+}
+
 export function CalendarView() {
   const getFilteredTasks = useBoardStore((s) => s.getFilteredTasks);
   const setSelectedTask = useBoardStore((s) => s.setSelectedTask);
   const addQuickTask = useBoardStore((s) => s.addQuickTask);
+  const updateTask = useBoardStore((s) => s.updateTask);
+
+  const [activeTask, setActiveTask] = useState<Task | null>(null);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
+  );
+
+  const handleDragStart = (event: DragStartEvent) => {
+    const task = getFilteredTasks().find((t) => t.id === event.active.id);
+    if (task) setActiveTask(task);
+  };
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    setActiveTask(null);
+    const { active, over } = event;
+    if (!over) return;
+    const taskId = active.id as string;
+    const newDate = over.id as string;
+    const task = getFilteredTasks().find((t) => t.id === taskId);
+    if (task && task.dueDate !== newDate) {
+      updateTask(taskId, { dueDate: newDate });
+      toast.success("Fecha actualizada");
+    }
+  };
 
   const handleDayClick = (dateStr: string) => {
     const title = prompt("Nombre de la tarea:");
@@ -150,6 +212,11 @@ export function CalendarView() {
   }
 
   return (
+    <DndContext
+      sensors={sensors}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+    >
     <div className="flex h-full flex-col gap-4">
       {/* Header / Navigation */}
       <div className="flex items-center justify-between">
@@ -201,9 +268,9 @@ export function CalendarView() {
               dayTasks.some((t) => t.status !== "completado");
 
             return (
-              <div
+              <DroppableDay
                 key={idx}
-                onClick={(e) => { if ((e.target as HTMLElement).closest("button")) return; handleDayClick(calDay.dateStr); }}
+                dateStr={calDay.dateStr}
                 className={cn(
                   "relative min-h-[80px] border-b border-r border-border p-1 sm:min-h-[100px] sm:p-2 cursor-pointer hover:bg-accent/20 transition-colors",
                   // Right border removed on last column
@@ -218,6 +285,9 @@ export function CalendarView() {
                   !calDay.isCurrentMonth && "bg-muted/30"
                 )}
               >
+                {/* Click handler for creating tasks on day click */}
+                {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
+                <div onClick={(e) => { if ((e.target as HTMLElement).closest("[data-draggable-pill]")) return; handleDayClick(calDay.dateStr); }} className="h-full">
                 {/* Day number */}
                 <span
                   className={cn(
@@ -233,8 +303,10 @@ export function CalendarView() {
                 {/* Task pills */}
                 <div className="mt-0.5 flex flex-col gap-0.5">
                   {dayTasks.slice(0, 3).map((task) => (
-                    <button
+                    <DraggableTaskPill
                       key={task.id}
+                      task={task}
+                      data-draggable-pill
                       onClick={() => setSelectedTask(task.id)}
                       className={cn(
                         "w-full truncate rounded px-1 py-0.5 text-left text-[10px] leading-tight transition-opacity hover:opacity-80 sm:text-xs",
@@ -243,7 +315,7 @@ export function CalendarView() {
                       title={task.title.replace(/<[^>]*>/g, "")}
                     >
                       {task.title.replace(/<[^>]*>/g, "")}
-                    </button>
+                    </DraggableTaskPill>
                   ))}
                   {dayTasks.length > 3 && (
                     <span className="px-1 text-[10px] text-muted-foreground">
@@ -251,11 +323,26 @@ export function CalendarView() {
                     </span>
                   )}
                 </div>
-              </div>
+                </div>
+              </DroppableDay>
             );
           })}
         </div>
       </div>
     </div>
+
+    <DragOverlay>
+      {activeTask && (
+        <div
+          className={cn(
+            "rounded px-2 py-1 text-xs shadow-lg",
+            priorityPillColors[activeTask.priority] ?? "bg-gray-400/80 text-white"
+          )}
+        >
+          {activeTask.title.replace(/<[^>]*>/g, "")}
+        </div>
+      )}
+    </DragOverlay>
+    </DndContext>
   );
 }

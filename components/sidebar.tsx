@@ -178,6 +178,7 @@ function PageTreeItem({ page, depth, collapsed: sidebarCollapsed }: { page: Page
       <MenuItemComp onClick={() => { addPage(page.id, page.isPrivate); if (!expandedPageIds.includes(page.id)) togglePageExpanded(page.id); }}><Plus className="mr-2 h-3.5 w-3.5" />Agregar sub-página</MenuItemComp>
       <MenuItemComp onClick={() => { duplicatePage(page.id); toast.success("Página duplicada"); }}><Copy className="mr-2 h-3.5 w-3.5" />Duplicar</MenuItemComp>
       <MenuItemComp onClick={() => { exportMarkdown(); toast.success("Markdown descargado"); }}><Download className="mr-2 h-3.5 w-3.5" />Exportar Markdown</MenuItemComp>
+      <MenuItemComp onClick={() => { useSidebarStore.getState().savePageAsTemplate(page.id); }}><Download className="mr-2 h-3.5 w-3.5" />Guardar como template</MenuItemComp>
       <SepComp />
       <MenuItemComp onClick={() => {
               movePageToTrash(page.id);
@@ -861,6 +862,12 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
                       <DropdownMenuItem onClick={() => { addPage(null, false); toast.success("Página creada"); }}>📄 Página en blanco</DropdownMenuItem>
                       {useSidebarStore.getState().pageTemplates.filter((t) => t.id !== "pt_4").map((tmpl) => (
                         <DropdownMenuItem key={tmpl.id} onClick={() => { useSidebarStore.getState().addPageFromTemplate(tmpl.id, null, false); toast.success("Página creada"); }}>
+                          {tmpl.emoji} {tmpl.name}
+                        </DropdownMenuItem>
+                      ))}
+                      {useSidebarStore.getState().customPageTemplates.length > 0 && <DropdownMenuSeparator />}
+                      {useSidebarStore.getState().customPageTemplates.map((tmpl) => (
+                        <DropdownMenuItem key={tmpl.id} onClick={() => { useSidebarStore.getState().addPageFromTemplate(tmpl.id, null, false); toast.success("Página creada desde template"); }}>
                           {tmpl.emoji} {tmpl.name}
                         </DropdownMenuItem>
                       ))}

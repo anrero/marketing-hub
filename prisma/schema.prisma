@@ -207,6 +207,7 @@ model Page {
   emoji       String    @default("📄")
   coverImage  String?
   isPrivate   Boolean   @default(false)
+  isTemplate  Boolean   @default(false)
   position    Int       @default(0)
   parentId    String?
   parent      Page?     @relation("subpages", fields: [parentId], references: [id])

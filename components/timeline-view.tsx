@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useBoardStore } from "@/stores/board-store";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 const DAY_WIDTH = 30;
 
@@ -43,6 +44,76 @@ export function TimelineView() {
   const tasks = useBoardStore(useShallow((s) => s.getFilteredTasks()));
   const allMembers = useBoardStore(useShallow((s) => s.getAllTeamMembers()));
   const setSelectedTask = useBoardStore((s) => s.setSelectedTask);
+  const updateTask = useBoardStore((s) => s.updateTask);
+
+  const [resizing, setResizing] = useState<{
+    taskId: string;
+    edge: "start" | "end";
+    startX: number;
+    origLeft: number;
+    origWidth: number;
+  } | null>(null);
+
+  const [resizeDelta, setResizeDelta] = useState(0);
+
+  const handleResizeStart = (e: React.MouseEvent, taskId: string, edge: "start" | "end") => {
+    e.stopPropagation();
+    const row = taskRows.find((r) => r.task.id === taskId);
+    if (!row) return;
+    setResizing({
+      taskId,
+      edge,
+      startX: e.clientX,
+      origLeft: row.startOffset,
+      origWidth: row.barWidth,
+    });
+    setResizeDelta(0);
+  };
+
+  useEffect(() => {
+    if (!resizing) return;
+
+    const onMove = (e: MouseEvent) => {
+      setResizeDelta(e.clientX - resizing.startX);
+    };
+
+    const onUp = (e: MouseEvent) => {
+      const deltaPixels = e.clientX - resizing.startX;
+      const deltaDays = Math.round(deltaPixels / DAY_WIDTH);
+
+      if (deltaDays !== 0) {
+        const task = tasks.find((t) => t.id === resizing.taskId);
+        if (task && task.dueDate) {
+          if (resizing.edge === "end") {
+            const due = new Date(task.dueDate);
+            due.setDate(due.getDate() + deltaDays);
+            updateTask(task.id, { dueDate: due.toISOString().split("T")[0] });
+            toast.success("Fecha actualizada");
+          } else if (resizing.edge === "start") {
+            // Adjust due date inversely when dragging start edge
+            // (shrinking from left extends, extending from left shrinks)
+            const due = new Date(task.dueDate);
+            due.setDate(due.getDate() - deltaDays);
+            const newDueStr = due.toISOString().split("T")[0];
+            if (newDueStr !== task.dueDate) {
+              updateTask(task.id, { dueDate: newDueStr });
+              toast.success("Fecha actualizada");
+            }
+          }
+        }
+      }
+
+      setResizing(null);
+      setResizeDelta(0);
+    };
+
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+    return () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+  }, [resizing, tasks, updateTask]);
 
   const today = useMemo(() => startOfDay(new Date()), []);
 
@@ -288,20 +359,43 @@ export function TimelineView() {
                 );
               }
 
+              const isResizingThis = resizing?.taskId === task.id;
+              let displayLeft = startOffset;
+              let displayWidth = barWidth;
+              if (isResizingThis) {
+                if (resizing.edge === "end") {
+                  displayWidth = Math.max(DAY_WIDTH, barWidth + resizeDelta);
+                } else if (resizing.edge === "start") {
+                  displayLeft = startOffset + resizeDelta;
+                  displayWidth = Math.max(DAY_WIDTH, barWidth - resizeDelta);
+                }
+              }
+
               return (
                 <div
                   key={task.id}
-                  className="absolute z-10 rounded-md cursor-pointer hover:opacity-80 transition-opacity"
+                  className="absolute z-10 rounded-md cursor-pointer hover:opacity-80 transition-opacity group"
                   title={tooltip}
                   style={{
-                    left: startOffset,
+                    left: displayLeft,
                     top,
-                    width: barWidth,
+                    width: displayWidth,
                     height: 20,
                     backgroundColor: color,
                   }}
-                  onClick={() => setSelectedTask(task.id)}
-                />
+                  onClick={() => { if (!resizing) setSelectedTask(task.id); }}
+                >
+                  {/* Left resize handle */}
+                  <div
+                    className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize opacity-0 group-hover:opacity-100 bg-white/30 rounded-l-md"
+                    onMouseDown={(e) => handleResizeStart(e, task.id, "start")}
+                  />
+                  {/* Right resize handle */}
+                  <div
+                    className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize opacity-0 group-hover:opacity-100 bg-white/30 rounded-r-md"
+                    onMouseDown={(e) => handleResizeStart(e, task.id, "end")}
+                  />
+                </div>
               );
             })}
 

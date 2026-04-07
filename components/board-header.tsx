@@ -18,6 +18,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useBoardStore } from "@/stores/board-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { PRIORITIES } from "@/lib/mock-data";
+import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
 export function BoardHeader() {
@@ -29,16 +30,21 @@ export function BoardHeader() {
     filterPriority,
     filterStatus,
     filterAssignee,
+    filterTags,
+    filterDateRange,
     viewMode,
     setFilterStore,
     setFilterPriority,
     setFilterStatus,
     setFilterAssignee,
+    setFilterTags,
+    setFilterDateRange,
     setViewMode,
     setNewTaskDialogOpen,
     setCommandOpen,
     getAllStores,
     getAllTeamMembers,
+    getAllTags,
     getOverdueTasks,
     setSelectedTask,
     renameBoard,
@@ -50,7 +56,7 @@ export function BoardHeader() {
   const [titleDraft, setTitleDraft] = useState("");
   const titleInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => { if (editingTitle) { setTitleDraft(activeBoard?.name ?? ""); setTimeout(() => { titleInputRef.current?.focus(); titleInputRef.current?.select(); }, 0); } }, [editingTitle, activeBoard?.name]);
-  const hasFilters = filterStore || filterPriority || filterStatus || filterAssignee;
+  const hasFilters = filterStore || filterPriority || filterStatus || filterAssignee || filterTags.length > 0 || filterDateRange;
   const allStores = getAllStores();
   const allMembers = getAllTeamMembers();
   const overdueTasks = getOverdueTasks();
@@ -140,6 +146,8 @@ export function BoardHeader() {
     setFilterPriority(null);
     setFilterStatus(null);
     setFilterAssignee(null);
+    setFilterTags([]);
+    setFilterDateRange(null);
   };
 
   return (
@@ -440,6 +448,55 @@ export function BoardHeader() {
             ))}
           </SelectContent>
         </Select>
+
+        {/* Tag filter */}
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button variant="outline" size="sm" className={cn("h-8 text-xs", filterTags.length > 0 && "border-primary text-primary")}>
+              {filterTags.length > 0 ? `${filterTags.length} tags` : "Tags"}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-48 p-2" align="start">
+            <div className="space-y-1">
+              {getAllTags().map(tag => {
+                const isActive = filterTags.includes(tag.id);
+                return (
+                  <button key={tag.id} onClick={() => {
+                    setFilterTags(isActive ? filterTags.filter(id => id !== tag.id) : [...filterTags, tag.id]);
+                  }} className={cn("flex w-full items-center gap-2 rounded px-2 py-1 text-xs hover:bg-accent", isActive && "bg-accent")}>
+                    <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: tag.color }} />
+                    {tag.name}
+                  </button>
+                );
+              })}
+            </div>
+          </PopoverContent>
+        </Popover>
+
+        {/* Date filter */}
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button variant="outline" size="sm" className={cn("h-8 text-xs", filterDateRange && "border-primary text-primary")}>
+              {filterDateRange ? (filterDateRange === "today" ? "Hoy" : filterDateRange === "week" ? "Esta semana" : filterDateRange === "month" ? "Este mes" : filterDateRange === "overdue" ? "Vencidas" : filterDateRange === "nodate" ? "Sin fecha" : "Rango") : "Fecha"}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-48 p-2" align="start">
+            <div className="space-y-1">
+              {[
+                { value: "today", label: "Hoy" },
+                { value: "week", label: "Esta semana" },
+                { value: "month", label: "Este mes" },
+                { value: "overdue", label: "Vencidas" },
+                { value: "nodate", label: "Sin fecha" },
+              ].map(opt => (
+                <button key={opt.value} onClick={() => setFilterDateRange(filterDateRange === opt.value ? null : opt.value)}
+                  className={cn("flex w-full items-center rounded px-2 py-1.5 text-xs hover:bg-accent", filterDateRange === opt.value && "bg-accent font-medium")}>
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </PopoverContent>
+        </Popover>
 
         {hasFilters && (
           <Button

@@ -38,6 +38,8 @@ interface BoardState {
   filterPriority: string | null;
   filterStatus: string | null;
   filterAssignee: string | null;
+  filterTags: string[];
+  filterDateRange: string | null;  // "today" | "week" | "month" | "overdue" | "nodate" | "YYYY-MM-DD_YYYY-MM-DD" (custom range)
   viewMode: "kanban" | "tabla" | "calendario" | "galeria" | "timeline";
   newTaskDialogOpen: boolean;
   newBoardDialogOpen: boolean;
@@ -62,6 +64,8 @@ interface BoardState {
   setFilterPriority: (priority: string | null) => void;
   setFilterStatus: (status: string | null) => void;
   setFilterAssignee: (assignee: string | null) => void;
+  setFilterTags: (tags: string[]) => void;
+  setFilterDateRange: (range: string | null) => void;
   setViewMode: (mode: "kanban" | "tabla" | "calendario" | "galeria" | "timeline") => void;
   setNewTaskDialogOpen: (open: boolean) => void;
   setNewBoardDialogOpen: (open: boolean) => void;
@@ -95,6 +99,7 @@ interface BoardState {
   updateTeamMember: (memberId: string, updates: Partial<TeamMember>) => void;
   duplicateTask: (taskId: string) => void;
   deleteTask: (taskId: string) => void;
+  moveTaskToBoard: (taskId: string, newBoardId: string) => void;
   // URL actions
   addTaskUrl: (taskId: string, url: string) => void;
   removeTaskUrl: (taskId: string, urlId: string) => void;
@@ -346,6 +351,8 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
   filterPriority: null,
   filterStatus: null,
   filterAssignee: null,
+  filterTags: [],
+  filterDateRange: null,
   viewMode: "kanban",
   newTaskDialogOpen: false,
   newBoardDialogOpen: false,
@@ -470,6 +477,8 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
   setFilterPriority: (priority) => set({ filterPriority: priority }),
   setFilterStatus: (status) => set({ filterStatus: status }),
   setFilterAssignee: (assignee) => set({ filterAssignee: assignee }),
+  setFilterTags: (tags) => set({ filterTags: tags }),
+  setFilterDateRange: (range) => set({ filterDateRange: range }),
   setViewMode: (mode) => set({ viewMode: mode }),
   setNewTaskDialogOpen: (open) => set({ newTaskDialogOpen: open }),
   setNewBoardDialogOpen: (open) => set({ newBoardDialogOpen: open }),
@@ -903,6 +912,26 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     apiDeleteTask(taskId);
   },
 
+  moveTaskToBoard: (taskId, newBoardId) => {
+    const state = get();
+    const task = state.tasks.find(t => t.id === taskId);
+    if (!task) return;
+
+    // Move locally: remove from current board, add to new board
+    set((s) => ({
+      boards: s.boards.map(b => ({
+        ...b,
+        taskIds: b.id === newBoardId
+          ? [...b.taskIds, taskId]
+          : b.taskIds.filter(id => id !== taskId),
+      })),
+      selectedTaskId: null, // Close the detail panel
+    }));
+
+    // Persist to server — PATCH the task's boardId
+    apiPatchTask(taskId, { boardId: newBoardId });
+  },
+
   // URLs
   addTaskUrl: (taskId, url) => {
     const tempId = `url_${Date.now()}`;
@@ -1108,6 +1137,31 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     if (state.filterPriority) result = result.filter((t) => t.priority === state.filterPriority);
     if (state.filterStatus) result = result.filter((t) => t.status === state.filterStatus);
     if (state.filterAssignee) result = result.filter((t) => t.assigneeId === state.filterAssignee);
+    if (state.filterTags.length > 0) result = result.filter((t) => (t.tags ?? []).some(tagId => state.filterTags.includes(tagId)));
+    if (state.filterDateRange) {
+      const today = new Date().toISOString().split("T")[0];
+      const todayDate = new Date(today);
+      if (state.filterDateRange === "today") {
+        result = result.filter((t) => t.dueDate === today);
+      } else if (state.filterDateRange === "week") {
+        const weekEnd = new Date(todayDate);
+        weekEnd.setDate(weekEnd.getDate() + 7);
+        const weekStr = weekEnd.toISOString().split("T")[0];
+        result = result.filter((t) => t.dueDate >= today && t.dueDate <= weekStr);
+      } else if (state.filterDateRange === "month") {
+        const monthEnd = new Date(todayDate);
+        monthEnd.setMonth(monthEnd.getMonth() + 1);
+        const monthStr = monthEnd.toISOString().split("T")[0];
+        result = result.filter((t) => t.dueDate >= today && t.dueDate <= monthStr);
+      } else if (state.filterDateRange === "overdue") {
+        result = result.filter((t) => t.dueDate && t.dueDate < today && t.status !== "completado");
+      } else if (state.filterDateRange === "nodate") {
+        result = result.filter((t) => !t.dueDate);
+      } else if (state.filterDateRange.includes("_")) {
+        const [from, to] = state.filterDateRange.split("_");
+        result = result.filter((t) => t.dueDate >= from && t.dueDate <= to);
+      }
+    }
     return result;
   },
 

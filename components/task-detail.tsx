@@ -110,6 +110,7 @@ export function TaskDetail() {
     removeAttachment, getAllStores, getAllCampaignTypes, getAllTeamMembers,
     addSubtask, toggleSubtask, removeSubtask, reorderSubtasks, setReminder,
     getAllTags, archiveTask, unarchiveTask, duplicateTask, deleteTask,
+    moveTaskToBoard, boards,
     addTaskUrl, removeTaskUrl,
     addComment: storeAddComment, addTaskTag, removeTaskTag, addDependency, removeDependency,
     addTag,
@@ -347,6 +348,25 @@ export function TaskDetail() {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          {/* Move to another board */}
+          <div className="flex items-center gap-2">
+            <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
+            <select
+              onChange={(e) => {
+                if (e.target.value) {
+                  moveTaskToBoard(task.id, e.target.value);
+                  toast.success("Tarea movida a otro board");
+                }
+              }}
+              className="flex-1 h-7 text-xs bg-transparent border border-border rounded px-2 outline-none"
+              defaultValue=""
+            >
+              <option value="" disabled>Mover a otro board...</option>
+              {boards.filter(b => !b.taskIds.includes(task.id)).map(b => (
+                <option key={b.id} value={b.id}>{b.name}</option>
+              ))}
+            </select>
+          </div>
           <div className="flex-1" />
           <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground" onClick={() => setSelectedTask(null)}>
             <X className="h-4 w-4" />

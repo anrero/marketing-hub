@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { toast } from "sonner";
 
 export type BlockType =
   | "text" | "h1" | "h2" | "h3" | "h4"
@@ -110,7 +111,9 @@ interface SidebarState {
   permanentlyDelete: (id: string) => void;
   emptyTrash: () => void;
   pageTemplates: PageTemplate[];
+  customPageTemplates: PageTemplate[];
   addPageFromTemplate: (templateId: string, parentId: string | null, isPrivate: boolean) => string;
+  savePageAsTemplate: (pageId: string) => void;
   importMarkdown: (markdown: string) => string;
 }
 
@@ -191,6 +194,7 @@ export const useSidebarStore = create<SidebarState>()(persist((set, get) => ({
   mainView: "board",
   favorites: [],
   _pagesLoaded: false,
+  customPageTemplates: [],
 
   // ── Load pages from server ──
   loadPagesFromServer: async (workspaceId: string) => {
@@ -220,6 +224,31 @@ export const useSidebarStore = create<SidebarState>()(persist((set, get) => ({
           id: f.itemId,
         }));
         set({ favorites });
+      }
+
+      // Also load custom page templates from server
+      const tmplRes = await fetch(`/api/pages?workspaceId=${workspaceId}&templates=true`, { headers: getSidebarAuthHeaders(false) });
+      if (tmplRes.ok) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const tmplPages = (await tmplRes.json()).map((p: any) => ({
+          id: p.id,
+          name: p.title,
+          emoji: p.emoji || "📄",
+          blocks: (p.blocks || []).map((blk: { id: string; type: string; content: string; properties?: Record<string, unknown> }) => {
+            const props = blk.properties || {};
+            return {
+              id: blk.id,
+              type: (blk.type || "text") as BlockType,
+              content: blk.content || "",
+              ...(props.checked !== undefined ? { checked: props.checked } : {}),
+              ...(props.emoji ? { emoji: props.emoji } : {}),
+              ...(props.color ? { color: props.color } : {}),
+              ...(props.url ? { url: props.url } : {}),
+              ...(props.tableData ? { tableData: props.tableData } : {}),
+            };
+          }),
+        }));
+        set({ customPageTemplates: tmplPages });
       }
     } catch (e) {
       console.error("Error loading pages:", e);
@@ -657,7 +686,7 @@ export const useSidebarStore = create<SidebarState>()(persist((set, get) => ({
 
   addPageFromTemplate: (templateId, parentId, isPrivate) => {
     const state = get();
-    const tmpl = state.pageTemplates.find((t) => t.id === templateId);
+    const tmpl = state.pageTemplates.find((t) => t.id === templateId) || state.customPageTemplates.find((t) => t.id === templateId);
     if (!tmpl) return "";
     const id = `pg_${Date.now()}`;
     const now = Date.now();
@@ -695,6 +724,46 @@ export const useSidebarStore = create<SidebarState>()(persist((set, get) => ({
       }).catch((e) => console.error("API create page from template error:", e));
     }
     return id;
+  },
+
+  savePageAsTemplate: (pageId) => {
+    const page = get().pages.find(p => p.id === pageId);
+    if (!page) return;
+    const authData = JSON.parse(localStorage.getItem("mh-auth-storage") || "{}");
+    const workspaceId = authData?.state?.currentUser?.workspaceId;
+    if (!workspaceId) return;
+
+    // Create a template page on server
+    fetch("/api/pages", {
+      method: "POST",
+      headers: getSidebarAuthHeaders(),
+      body: JSON.stringify({ title: `${page.title} (template)`, emoji: page.emoji, workspaceId, isTemplate: true }),
+    }).then(r => r.json()).then(saved => {
+      // Copy blocks to the template
+      if (page.blocks.length > 0) {
+        apiUpdatePage(saved.id, {
+          blocks: page.blocks.map(blk => ({
+            type: blk.type, content: blk.content,
+            properties: {
+              ...(blk.checked !== undefined && { checked: blk.checked }),
+              ...(blk.emoji && { emoji: blk.emoji }),
+              ...(blk.color && { color: blk.color }),
+              ...(blk.url && { url: blk.url }),
+              ...(blk.tableData && { tableData: blk.tableData }),
+            },
+          })),
+        });
+      }
+      // Add to local customPageTemplates
+      const newTmpl: PageTemplate = {
+        id: saved.id,
+        name: `${page.title} (template)`,
+        emoji: page.emoji,
+        blocks: page.blocks.map((blk, i) => ({ ...blk, id: `blk_tmpl_${Date.now()}_${i}` })),
+      };
+      set((s) => ({ customPageTemplates: [...s.customPageTemplates, newTmpl] }));
+      toast.success("Template guardado");
+    }).catch(e => console.error("Save template error:", e));
   },
 
   importMarkdown: (markdown) => {

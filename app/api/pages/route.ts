@@ -16,6 +16,17 @@ export async function GET(request: Request) {
     });
     if (!membership) return NextResponse.json({ error: "Sin acceso a este workspace" }, { status: 403 });
 
+    // Support ?templates=true to return only template pages
+    const templates = searchParams.get("templates") === "true";
+    if (templates) {
+      const tmplPages = await prisma.page.findMany({
+        where: { createdById: user!.id, isTemplate: true, deletedAt: null },
+        include: { blocks: { orderBy: { position: "asc" } } },
+        orderBy: { position: "asc" },
+      });
+      return NextResponse.json(tmplPages);
+    }
+
     // Support ?deleted=true to return soft-deleted pages for trash
     const deleted = searchParams.get("deleted") === "true";
 
@@ -24,7 +35,8 @@ export async function GET(request: Request) {
       where: {
         workspaceId,
         createdById: user!.id,
-        deletedAt: deleted ? { not: null } : null
+        deletedAt: deleted ? { not: null } : null,
+        isTemplate: false,
       },
       include: { blocks: { orderBy: { position: "asc" } } },
       orderBy: { position: "asc" },
@@ -41,7 +53,7 @@ export async function POST(request: Request) {
   try {
     const { user, error } = await getAuthUser(request);
     if (error) return error;
-    const { title, emoji, workspaceId, parentId, isPrivate } = await request.json();
+    const { title, emoji, workspaceId, parentId, isPrivate, isTemplate } = await request.json();
     if (!workspaceId) return NextResponse.json({ error: "workspaceId requerido" }, { status: 400 });
 
     // Verify user is a workspace member
@@ -60,6 +72,7 @@ export async function POST(request: Request) {
         createdById: user!.id,
         parentId: parentId || null,
         isPrivate: isPrivate || false,
+        isTemplate: isTemplate || false,
         position: count,
         blocks: { create: [{ type: "text", content: "", position: 0 }] },
       },
