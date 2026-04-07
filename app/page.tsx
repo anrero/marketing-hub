@@ -183,7 +183,14 @@ function AppShell() {
   const [dataLoading, setDataLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const loadedForWorkspace = useRef<string | null>(null);
-  const urlRestoredRef = useRef(false);
+  const [urlRestored, setUrlRestored] = useState(false);
+
+  // Read URL params ONCE at mount — before any data loading overwrites state
+  const initialUrlParams = useRef<{ view: string | null; id: string | null } | null>(null);
+  if (initialUrlParams.current === null && typeof window !== "undefined") {
+    const params = new URLSearchParams(window.location.search);
+    initialUrlParams.current = { view: params.get("view"), id: params.get("id") };
+  }
 
   // Load workspace data on mount or when workspace changes (new login)
   const loadAllData = async (wsId: string) => {
@@ -197,12 +204,9 @@ function AppShell() {
     if (!boardsOk) setLoadError(true);
     setDataLoading(false);
 
-    // Restore navigation from URL params AFTER data loads
-    if (!urlRestoredRef.current) {
-      urlRestoredRef.current = true;
-      const params = new URLSearchParams(window.location.search);
-      const view = params.get("view");
-      const id = params.get("id");
+    // Restore navigation from URL params AFTER data loads (only once)
+    if (!urlRestored && initialUrlParams.current) {
+      const { view, id } = initialUrlParams.current;
       if (view === "page" && id) {
         setMainView("page");
         setActivePageId(id);
@@ -214,6 +218,9 @@ function AppShell() {
       } else if (view === "inbox") {
         setMainView("inbox");
       }
+      setUrlRestored(true);
+    } else if (!urlRestored) {
+      setUrlRestored(true);
     }
   };
 
@@ -232,9 +239,9 @@ function AppShell() {
     return () => clearInterval(interval);
   }, [workspaceId, refreshFromServer]);
 
-  // Sync URL with current navigation state
+  // Sync URL with current navigation state (only after URL restore is done)
   useEffect(() => {
-    if (!serverLoaded) return;
+    if (!serverLoaded || !urlRestored) return;
     let url = "/";
     if (mainView === "page" && activePageId) {
       url = `/?view=page&id=${activePageId}`;
@@ -246,7 +253,7 @@ function AppShell() {
       url = "/?view=inbox";
     }
     window.history.replaceState(null, "", url);
-  }, [mainView, activePageId, activeBoardId, serverLoaded]);
+  }, [mainView, activePageId, activeBoardId, serverLoaded, urlRestored]);
 
   // P2-18: Dynamic page title
   useEffect(() => {
