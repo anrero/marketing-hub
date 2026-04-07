@@ -541,8 +541,8 @@ function DateCell({ task, onUpdate, cellId, flashId }: { task: Task; onUpdate: (
 }
 
 // ── Actions cell ────────────────────────────────────────────
-function ActionsCell({ onViewDetail, onDuplicate, onDelete }: { onViewDetail: () => void; onDuplicate: () => void; onDelete: () => void }) {
-  return (<DropdownMenu><DropdownMenuTrigger asChild><button onClick={(e) => e.stopPropagation()} className="rounded p-1 hover:bg-muted transition-colors"><MoreHorizontal className="h-4 w-4 text-muted-foreground" /></button></DropdownMenuTrigger><DropdownMenuContent align="end" className="w-[150px]"><DropdownMenuItem onClick={onViewDetail}>Ver detalle</DropdownMenuItem><DropdownMenuItem onClick={onDuplicate}>Duplicar</DropdownMenuItem><DropdownMenuItem onClick={onDelete} className="text-red-500 focus:text-red-500">Eliminar</DropdownMenuItem></DropdownMenuContent></DropdownMenu>);
+function ActionsCell({ onViewDetail, onDuplicate, onDelete, otherBoards, onMoveToBoard }: { onViewDetail: () => void; onDuplicate: () => void; onDelete: () => void; otherBoards?: { id: string; name: string }[]; onMoveToBoard?: (boardId: string) => void }) {
+  return (<DropdownMenu><DropdownMenuTrigger asChild><button onClick={(e) => e.stopPropagation()} className="rounded p-1 hover:bg-muted transition-colors"><MoreHorizontal className="h-4 w-4 text-muted-foreground" /></button></DropdownMenuTrigger><DropdownMenuContent align="end" className="w-[180px]"><DropdownMenuItem onClick={onViewDetail}>Ver detalle</DropdownMenuItem><DropdownMenuItem onClick={onDuplicate}>Duplicar</DropdownMenuItem>{otherBoards && otherBoards.length > 0 && onMoveToBoard && (<><DropdownMenuSeparator />{otherBoards.map((b) => (<DropdownMenuItem key={b.id} onClick={() => onMoveToBoard(b.id)}>Mover a {b.name}</DropdownMenuItem>))}</>)}<DropdownMenuSeparator /><DropdownMenuItem onClick={onDelete} className="text-red-500 focus:text-red-500">Eliminar</DropdownMenuItem></DropdownMenuContent></DropdownMenu>);
 }
 
 // ── Custom field sub-cells ──────────────────────────────────
@@ -853,7 +853,7 @@ export function TableView() {
     addCustomStore, addCustomCampaignType, duplicateTask, deleteTask,
     getAllStores, getAllCampaignTypes, getAllTeamMembers, addQuickTask,
     boards, activeBoardId, getAllViews, activeViewId, setActiveViewId,
-    reorderBoardTasks,
+    reorderBoardTasks, moveTaskToBoard,
   } = useBoardStore();
 
   const columns = useTableColumnsStore((s) => s.columns);
@@ -1184,7 +1184,7 @@ export function TableView() {
                                 {col.builtIn ? renderBuiltInCell(col, task) : <CustomFieldCell col={col} task={task} onSave={(v) => handleCustomFieldUpdate(task.id, col.id, v)} cellId={`${task.id}-${col.id}`} flashId={flashId} />}
                               </td>
                             ))}
-                            <td className="px-2 py-2"><div className="flex justify-center opacity-0 group-hover:opacity-100 transition-opacity"><ActionsCell onViewDetail={() => setSelectedTask(task.id)} onDuplicate={() => { duplicateTask(task.id); toast.success("Tarea duplicada"); }} onDelete={() => { deleteTask(task.id); toast.success("Tarea movida a papelera"); }} /></div></td>
+                            <td className="px-2 py-2"><div className="flex justify-center opacity-0 group-hover:opacity-100 transition-opacity"><ActionsCell onViewDetail={() => setSelectedTask(task.id)} onDuplicate={() => { duplicateTask(task.id); toast.success("Tarea duplicada"); }} onDelete={() => { deleteTask(task.id); toast.success("Tarea movida a papelera"); }} otherBoards={boards.filter((b) => b.id !== activeBoardId)} onMoveToBoard={(boardId) => { const b = boards.find((x) => x.id === boardId); moveTaskToBoard(task.id, boardId); toast.success(`Tarea movida a ${b?.name || "otro board"}`); }} /></div></td>
                           </tr>
                         ))}
                       </Fragment>
@@ -1252,7 +1252,7 @@ export function TableView() {
                           })}
                           <td className="px-2 py-2">
                             <div className="flex justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                              <ActionsCell onViewDetail={() => setSelectedTask(task.id)} onDuplicate={() => { duplicateTask(task.id); toast.success("Tarea duplicada"); }} onDelete={() => { deleteTask(task.id); toast.success("Tarea movida a papelera"); }} />
+                              <ActionsCell onViewDetail={() => setSelectedTask(task.id)} onDuplicate={() => { duplicateTask(task.id); toast.success("Tarea duplicada"); }} onDelete={() => { deleteTask(task.id); toast.success("Tarea movida a papelera"); }} otherBoards={boards.filter((b) => b.id !== activeBoardId)} onMoveToBoard={(boardId) => { const b = boards.find((x) => x.id === boardId); moveTaskToBoard(task.id, boardId); toast.success(`Tarea movida a ${b?.name || "otro board"}`); }} />
                             </div>
                           </td>
                         </>

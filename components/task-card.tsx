@@ -51,7 +51,7 @@ export function TaskCard({ task }: { task: Task }) {
   } = useSortable({ id: task.id, data: { type: "task", task } });
 
   const style = { transform: CSS.Transform.toString(transform), transition };
-  const { duplicateTask, deleteTask, updateTask, moveTask, archiveTask, boards, activeBoardId } = useBoardStore();
+  const { duplicateTask, deleteTask, updateTask, moveTask, archiveTask, moveTaskToBoard, boards, activeBoardId } = useBoardStore();
   const activeBoard = boards.find((b) => b.id === activeBoardId);
   const cols = activeBoard?.columns ?? [];
 
@@ -161,6 +161,17 @@ export function TaskCard({ task }: { task: Task }) {
             {m.name}
           </ContextMenuItem>
         ))}
+        {boards.filter((b) => b.id !== activeBoardId).length > 0 && (
+          <>
+            <ContextMenuSeparator />
+            <div className="px-2 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase">Mover a board</div>
+            {boards.filter((b) => b.id !== activeBoardId).map((b) => (
+              <ContextMenuItem key={b.id} onClick={() => { moveTaskToBoard(task.id, b.id); toast.success(`Tarea movida a ${b.name}`); }}>
+                {b.name}
+              </ContextMenuItem>
+            ))}
+          </>
+        )}
         <ContextMenuSeparator />
         <ContextMenuItem onClick={() => { archiveTask(task.id); toast.success("Tarea archivada"); }}>Archivar</ContextMenuItem>
         <ContextMenuItem onClick={() => { if (confirm("¿Eliminar esta tarea?")) { deleteTask(task.id); toast.success("Tarea movida a papelera"); } }} className="text-red-500 focus:text-red-500">Eliminar</ContextMenuItem>
