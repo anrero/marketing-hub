@@ -164,10 +164,13 @@ export default function Home() {
 function AppShell() {
   const mainView = useSidebarStore((s) => s.mainView);
   const activePageId = useSidebarStore((s) => s.activePageId);
+  const setActivePageId = useSidebarStore((s) => s.setActivePageId);
+  const setMainView = useSidebarStore((s) => s.setMainView);
   const pages = useSidebarStore((s) => s.pages);
   const focusMode = useSidebarStore((s) => s.focusMode);
   const boards = useBoardStore((s) => s.boards);
   const activeBoardId = useBoardStore((s) => s.activeBoardId);
+  const setActiveBoard = useBoardStore((s) => s.setActiveBoard);
   const viewMode = useBoardStore((s) => s.viewMode);
   const serverLoaded = useBoardStore((s) => s._serverLoaded);
   const loadFromServer = useBoardStore((s) => s.loadFromServer);
@@ -180,6 +183,7 @@ function AppShell() {
   const [dataLoading, setDataLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const loadedForWorkspace = useRef<string | null>(null);
+  const urlRestoredRef = useRef(false);
 
   // Load workspace data on mount or when workspace changes (new login)
   const loadAllData = async (wsId: string) => {
@@ -192,13 +196,32 @@ function AppShell() {
     ]);
     if (!boardsOk) setLoadError(true);
     setDataLoading(false);
+
+    // Restore navigation from URL params AFTER data loads
+    if (!urlRestoredRef.current) {
+      urlRestoredRef.current = true;
+      const params = new URLSearchParams(window.location.search);
+      const view = params.get("view");
+      const id = params.get("id");
+      if (view === "page" && id) {
+        setMainView("page");
+        setActivePageId(id);
+      } else if (view === "board" && id) {
+        setMainView("board");
+        setActiveBoard(id);
+      } else if (view === "dashboard") {
+        setMainView("dashboard");
+      } else if (view === "inbox") {
+        setMainView("inbox");
+      }
+    }
   };
 
   useEffect(() => {
     if (!workspaceId || loadedForWorkspace.current === workspaceId) return;
     loadedForWorkspace.current = workspaceId;
     loadAllData(workspaceId);
-  }, [workspaceId, loadFromServer, loadPagesFromServer, loadWorkspacesFromServer]);
+  }, [workspaceId, loadFromServer, loadPagesFromServer, loadWorkspacesFromServer]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Polling every 30s for multi-user sync
   useEffect(() => {
@@ -208,6 +231,22 @@ function AppShell() {
     }, 30000);
     return () => clearInterval(interval);
   }, [workspaceId, refreshFromServer]);
+
+  // Sync URL with current navigation state
+  useEffect(() => {
+    if (!serverLoaded) return;
+    let url = "/";
+    if (mainView === "page" && activePageId) {
+      url = `/?view=page&id=${activePageId}`;
+    } else if (mainView === "board" && activeBoardId) {
+      url = `/?view=board&id=${activeBoardId}`;
+    } else if (mainView === "dashboard") {
+      url = "/?view=dashboard";
+    } else if (mainView === "inbox") {
+      url = "/?view=inbox";
+    }
+    window.history.replaceState(null, "", url);
+  }, [mainView, activePageId, activeBoardId, serverLoaded]);
 
   // P2-18: Dynamic page title
   useEffect(() => {

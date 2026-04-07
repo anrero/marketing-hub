@@ -112,6 +112,7 @@ export function TaskDetail() {
     getAllTags, archiveTask, unarchiveTask, duplicateTask, deleteTask,
     addTaskUrl, removeTaskUrl,
     addComment: storeAddComment, addTaskTag, removeTaskTag, addDependency, removeDependency,
+    addTag,
   } = useBoardStore();
 
   const { toggleFavorite, isFavorite } = useSidebarStore();
@@ -123,6 +124,8 @@ export function TaskDetail() {
   const [newComment, setNewComment] = useState("");
   const [newSubtaskTitle, setNewSubtaskTitle] = useState("");
   const [addingSubtask, setAddingSubtask] = useState(false);
+  const [newTagName, setNewTagName] = useState("");
+  const [newTagColor, setNewTagColor] = useState("#3b82f6");
   const [activityOpen, setActivityOpen] = useState(false);
   const subtaskInputRef = useRef<HTMLInputElement>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
@@ -491,6 +494,17 @@ export function TaskDetail() {
                       </button>
                     );
                   })}
+                  <div className="flex items-center gap-1 ml-1">
+                    <input type="color" value={newTagColor} onChange={(e) => setNewTagColor(e.target.value)} className="h-5 w-5 cursor-pointer rounded border-none p-0" title="Color del tag" />
+                    <input value={newTagName} onChange={(e) => setNewTagName(e.target.value)} placeholder="Nuevo tag..."
+                      className="h-5 w-16 text-[10px] bg-transparent border-b border-border/50 outline-none px-1"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && newTagName.trim()) {
+                          addTag({ id: `tag_${Date.now()}`, name: newTagName.trim(), color: newTagColor });
+                          setNewTagName("");
+                        }
+                      }} />
+                  </div>
                 </div>
               </PropRow>
               {/* Bloqueada por */}

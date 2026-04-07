@@ -371,8 +371,9 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
       }
       const apiBoards = await boardsRes.json();
 
-      // 2. Parse workspace members
+      // 2. Parse workspace members + tags
       let serverMembers: TeamMember[] = [];
+      let serverTags: Tag[] = [];
       if (wsRes.ok) {
         const wsData = await wsRes.json();
         serverMembers = (wsData.members || []).map((m: { id: string; name: string; avatarColor?: string; role?: string }) => ({
@@ -381,6 +382,9 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
           avatar: m.name.split(" ").map((w: string) => w[0]).join("").toUpperCase().slice(0, 2),
           role: m.role || "editor",
           color: m.avatarColor,
+        }));
+        serverTags = (wsData.tags || []).map((t: { id: string; name: string; color: string }) => ({
+          id: t.id, name: t.name, color: t.color,
         }));
       }
 
@@ -407,6 +411,7 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
         boards,
         tasks: allTasks,
         serverTeamMembers: serverMembers,
+        ...(serverTags.length > 0 ? { tags: serverTags } : {}),
         activeBoardId: state.activeBoardId && boards.some((b) => b.id === state.activeBoardId)
           ? state.activeBoardId
           : boards[0]?.id || "",
@@ -1212,8 +1217,27 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     { id: "tag_4", name: "Nuevo producto", color: "#22c55e" },
     { id: "tag_5", name: "Seasonal", color: "#3b82f6" },
   ],
-  addTag: (tag) => set((s) => ({ tags: [...s.tags, tag] })),
-  removeTag: (tagId) => set((s) => ({ tags: s.tags.filter((t) => t.id !== tagId) })),
+  addTag: (tag) => {
+    set((s) => ({ tags: [...s.tags, tag] }));
+    // Persist to server
+    const authData = JSON.parse(localStorage.getItem("mh-auth-storage") || "{}");
+    const workspaceId = authData?.state?.currentUser?.workspaceId;
+    if (workspaceId) {
+      fetch("/api/tags", {
+        method: "POST",
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ name: tag.name, color: tag.color, workspaceId }),
+      }).then((r) => r.json()).then((saved) => {
+        // Replace temp ID with server ID
+        set((s) => ({ tags: s.tags.map((t) => t.id === tag.id ? { ...t, id: saved.id } : t) }));
+      }).catch((e) => console.error("API create tag error:", e));
+    }
+  },
+  removeTag: (tagId) => {
+    set((s) => ({ tags: s.tags.filter((t) => t.id !== tagId) }));
+    fetch(`/api/tags?id=${tagId}`, { method: "DELETE", headers: getAuthHeaders() })
+      .catch((e) => console.error("API delete tag error:", e));
+  },
   updateTag: (tagId, updates) => set((s) => ({ tags: s.tags.map((t) => t.id === tagId ? { ...t, ...updates } : t) })),
 
   // Task templates
