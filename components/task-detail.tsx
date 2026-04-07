@@ -128,6 +128,9 @@ export function TaskDetail() {
   const titleRef = useRef<HTMLHeadingElement>(null);
   const descRef = useRef<HTMLDivElement>(null);
   const taskRef = useRef<typeof tasks[0] | undefined>(undefined);
+  const descDirtyRef = useRef(false);
+  const descHtmlRef = useRef("");
+  const lastSavedTaskIdRef = useRef<string | null>(null);
 
   const task = tasks.find((t) => t.id === selectedTaskId);
   taskRef.current = task;
@@ -187,34 +190,85 @@ export function TaskDetail() {
     }
   }, [selectedTaskId, task?.title]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Sync description
+  // Sync description — load from store into DOM and reset dirty state
   useEffect(() => {
     if (descRef.current && task) {
-      descRef.current.innerHTML = task.description ?? "";
+      const html = task.description ?? "";
+      descRef.current.innerHTML = html;
+      descHtmlRef.current = html;
+      descDirtyRef.current = false;
     }
   }, [selectedTaskId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Debounced auto-save for description (1 second)
+  // ── Description save helpers (3 layers: debounce, close, unmount) ──
+
   const descTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Flush description for a specific task (works from refs, no stale closures)
+  const flushDescriptionForTask = useCallback((taskId: string, html: string, surviveDismount = false) => {
+    if (descTimerRef.current) { clearTimeout(descTimerRef.current); descTimerRef.current = null; }
+    // Update local store
+    updateTask(taskId, { description: html });
+    // keepalive fetch survives component unmount and page navigation
+    if (surviveDismount) {
+      try {
+        fetch(`/api/tasks/${taskId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ description: html }),
+          keepalive: true,
+        }).catch(() => {});
+      } catch { /* ignore */ }
+    }
+    descDirtyRef.current = false;
+  }, [updateTask]);
+
+  // Layer 1: DEBOUNCE while typing (1 second of inactivity)
   const autoSaveDescription = useCallback(() => {
+    if (!descRef.current) return;
+    const html = descRef.current.innerHTML;
+    descHtmlRef.current = html;
+    descDirtyRef.current = true;
     if (descTimerRef.current) clearTimeout(descTimerRef.current);
     descTimerRef.current = setTimeout(() => {
       const currentTask = taskRef.current;
-      if (!descRef.current) { console.log("[DESC SAVE] debounce: descRef is null, SKIPPED"); return; }
-      const html = descRef.current.innerHTML;
-      if (currentTask && html !== (currentTask.description ?? "")) {
-        console.log("[DESC SAVE] debounce fired. taskId:", currentTask.id, "html:", html.substring(0, 80));
-        updateTask(currentTask.id, { description: html });
+      if (currentTask && descDirtyRef.current) {
+        flushDescriptionForTask(currentTask.id, descHtmlRef.current);
       }
     }, 1000);
-  }, [updateTask]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [flushDescriptionForTask]);
 
-  // Cleanup debounce timer on unmount
+  // Layer 3: SAVE on task change — when selectedTaskId changes, flush previous task's description
+  useEffect(() => {
+    const prevTaskId = lastSavedTaskIdRef.current;
+    if (prevTaskId && prevTaskId !== selectedTaskId && descDirtyRef.current) {
+      flushDescriptionForTask(prevTaskId, descHtmlRef.current);
+    }
+    lastSavedTaskIdRef.current = selectedTaskId;
+    descDirtyRef.current = false;
+  }, [selectedTaskId, flushDescriptionForTask]);
+
+  // Layer 2: SAVE on unmount — cleanup fires with current ref values
   useEffect(() => {
     return () => {
       if (descTimerRef.current) clearTimeout(descTimerRef.current);
+      const taskId = lastSavedTaskIdRef.current || taskRef.current?.id;
+      if (taskId && descDirtyRef.current) {
+        const html = descHtmlRef.current;
+        // keepalive fetch survives unmount
+        try {
+          fetch(`/api/tasks/${taskId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ description: html }),
+            keepalive: true,
+          }).catch(() => {});
+        } catch { /* ignore */ }
+        // Also update local store
+        try { useBoardStore.getState().updateTask(taskId, { description: html }); } catch { /* ignore */ }
+      }
     };
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const dndSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
@@ -240,10 +294,13 @@ export function TaskDetail() {
   const saveDescription = () => {
     if (!descRef.current || !task) return;
     const html = descRef.current.innerHTML;
-    if (descTimerRef.current) clearTimeout(descTimerRef.current);
+    descHtmlRef.current = html;
     if (html !== (task.description ?? "")) {
-      console.log("[DESC SAVE] onBlur fired. taskId:", task.id, "html:", html.substring(0, 80));
-      updateTask(task.id, { description: html });
+      flushDescriptionForTask(task.id, html);
+    } else {
+      // Clear pending timer even if no change
+      if (descTimerRef.current) { clearTimeout(descTimerRef.current); descTimerRef.current = null; }
+      descDirtyRef.current = false;
     }
   };
 
@@ -254,16 +311,16 @@ export function TaskDetail() {
 
   return (
     <Sheet open={!!selectedTaskId} onOpenChange={() => {
-      // Force-save description before closing (don't rely on blur/debounce)
-      if (descRef.current && task) {
-        if (descTimerRef.current) clearTimeout(descTimerRef.current);
+      // Layer 2 (close): force-save description using refs (not stale closure)
+      const currentTaskId = taskRef.current?.id;
+      if (descRef.current && currentTaskId) {
         const html = descRef.current.innerHTML;
-        console.log("[DESC SAVE] onClose. html:", html.substring(0, 80), "| stored:", (task.description ?? "").substring(0, 80));
-        if (html !== (task.description ?? "")) {
-          console.log("[DESC SAVE] onClose SAVING to server");
-          updateTask(task.id, { description: html });
+        descHtmlRef.current = html;
+        if (html !== (taskRef.current?.description ?? "")) {
+          flushDescriptionForTask(currentTaskId, html, true);
         } else {
-          console.log("[DESC SAVE] onClose SKIPPED (no change)");
+          if (descTimerRef.current) { clearTimeout(descTimerRef.current); descTimerRef.current = null; }
+          descDirtyRef.current = false;
         }
       }
       if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
