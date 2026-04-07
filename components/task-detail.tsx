@@ -126,11 +126,11 @@ export function TaskDetail() {
   const [activityOpen, setActivityOpen] = useState(false);
   const subtaskInputRef = useRef<HTMLInputElement>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
-  const descRef = useRef<HTMLDivElement>(null);
   const taskRef = useRef<typeof tasks[0] | undefined>(undefined);
+  const [descValue, setDescValue] = useState("");
   const descDirtyRef = useRef(false);
-  const descHtmlRef = useRef("");
-  const lastSavedTaskIdRef = useRef<string | null>(null);
+  const descValueRef = useRef("");
+  const descTaskIdRef = useRef<string | null>(null);
 
   const task = tasks.find((t) => t.id === selectedTaskId);
   taskRef.current = task;
@@ -190,82 +190,66 @@ export function TaskDetail() {
     }
   }, [selectedTaskId, task?.title]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Sync description — load from store into DOM and reset dirty state
+  // ── Description: load from store when task changes ──
   useEffect(() => {
-    if (descRef.current && task) {
-      const html = task.description ?? "";
-      descRef.current.innerHTML = html;
-      descHtmlRef.current = html;
+    if (task) {
+      const val = task.description ?? "";
+      setDescValue(val);
+      descValueRef.current = val;
       descDirtyRef.current = false;
+      descTaskIdRef.current = task.id;
     }
   }, [selectedTaskId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Description save helpers (3 layers: debounce, close, unmount) ──
-
+  // ── Description: persist to server via direct keepalive fetch ──
   const descTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Flush description for a specific task (works from refs, no stale closures)
-  const flushDescriptionForTask = useCallback((taskId: string, html: string, surviveDismount = false) => {
-    if (descTimerRef.current) { clearTimeout(descTimerRef.current); descTimerRef.current = null; }
-    // Update local store
-    updateTask(taskId, { description: html });
-    // keepalive fetch survives component unmount and page navigation
-    if (surviveDismount) {
-      try {
-        fetch(`/api/tasks/${taskId}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ description: html }),
-          keepalive: true,
-        }).catch(() => {});
-      } catch { /* ignore */ }
-    }
+  const persistDescription = useCallback((taskId: string, text: string) => {
+    console.log("[DESC] persistDescription called:", taskId, text.substring(0, 60));
+    // Update local store immediately
+    useBoardStore.getState().updateTask(taskId, { description: text });
+    // ALSO fire a direct keepalive fetch to guarantee server persistence
+    fetch(`/api/tasks/${taskId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ description: text }),
+      keepalive: true,
+    }).then((r) => console.log("[DESC] server response:", r.status))
+      .catch((e) => console.error("[DESC] server error:", e));
     descDirtyRef.current = false;
-  }, [updateTask]);
+  }, []);
 
-  // Layer 1: DEBOUNCE while typing (1 second of inactivity)
-  const autoSaveDescription = useCallback(() => {
-    if (!descRef.current) return;
-    const html = descRef.current.innerHTML;
-    descHtmlRef.current = html;
+  // Layer 1: Debounce while typing — 1 second after last keystroke
+  const onDescChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const val = e.target.value;
+    setDescValue(val);
+    descValueRef.current = val;
     descDirtyRef.current = true;
     if (descTimerRef.current) clearTimeout(descTimerRef.current);
     descTimerRef.current = setTimeout(() => {
-      const currentTask = taskRef.current;
-      if (currentTask && descDirtyRef.current) {
-        flushDescriptionForTask(currentTask.id, descHtmlRef.current);
+      const tid = descTaskIdRef.current;
+      if (tid && descDirtyRef.current) {
+        persistDescription(tid, descValueRef.current);
       }
     }, 1000);
-  }, [flushDescriptionForTask]);
+  }, [persistDescription]);
 
-  // Layer 3: SAVE on task change — when selectedTaskId changes, flush previous task's description
-  useEffect(() => {
-    const prevTaskId = lastSavedTaskIdRef.current;
-    if (prevTaskId && prevTaskId !== selectedTaskId && descDirtyRef.current) {
-      flushDescriptionForTask(prevTaskId, descHtmlRef.current);
-    }
-    lastSavedTaskIdRef.current = selectedTaskId;
-    descDirtyRef.current = false;
-  }, [selectedTaskId, flushDescriptionForTask]);
-
-  // Layer 2: SAVE on unmount — cleanup fires with current ref values
+  // Layer 2: Save on unmount / close — cleanup with refs (no stale closures)
   useEffect(() => {
     return () => {
       if (descTimerRef.current) clearTimeout(descTimerRef.current);
-      const taskId = lastSavedTaskIdRef.current || taskRef.current?.id;
-      if (taskId && descDirtyRef.current) {
-        const html = descHtmlRef.current;
+      if (descDirtyRef.current && descTaskIdRef.current) {
+        const tid = descTaskIdRef.current;
+        const text = descValueRef.current;
+        console.log("[DESC] unmount flush:", tid, text.substring(0, 60));
         // keepalive fetch survives unmount
-        try {
-          fetch(`/api/tasks/${taskId}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ description: html }),
-            keepalive: true,
-          }).catch(() => {});
-        } catch { /* ignore */ }
-        // Also update local store
-        try { useBoardStore.getState().updateTask(taskId, { description: html }); } catch { /* ignore */ }
+        fetch(`/api/tasks/${tid}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ description: text }),
+          keepalive: true,
+        }).catch(() => {});
+        try { useBoardStore.getState().updateTask(tid, { description: text }); } catch { /* ignore */ }
       }
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -292,15 +276,10 @@ export function TaskDetail() {
     toast.success("Subtarea agregada");
   };
   const saveDescription = () => {
-    if (!descRef.current || !task) return;
-    const html = descRef.current.innerHTML;
-    descHtmlRef.current = html;
-    if (html !== (task.description ?? "")) {
-      flushDescriptionForTask(task.id, html);
-    } else {
-      // Clear pending timer even if no change
-      if (descTimerRef.current) { clearTimeout(descTimerRef.current); descTimerRef.current = null; }
-      descDirtyRef.current = false;
+    if (!task) return;
+    if (descTimerRef.current) clearTimeout(descTimerRef.current);
+    if (descDirtyRef.current) {
+      persistDescription(task.id, descValueRef.current);
     }
   };
 
@@ -311,17 +290,13 @@ export function TaskDetail() {
 
   return (
     <Sheet open={!!selectedTaskId} onOpenChange={() => {
-      // Layer 2 (close): force-save description using refs (not stale closure)
-      const currentTaskId = taskRef.current?.id;
-      if (descRef.current && currentTaskId) {
-        const html = descRef.current.innerHTML;
-        descHtmlRef.current = html;
-        if (html !== (taskRef.current?.description ?? "")) {
-          flushDescriptionForTask(currentTaskId, html, true);
-        } else {
-          if (descTimerRef.current) { clearTimeout(descTimerRef.current); descTimerRef.current = null; }
-          descDirtyRef.current = false;
-        }
+      // Force-save description on close using refs
+      if (descTimerRef.current) clearTimeout(descTimerRef.current);
+      if (descDirtyRef.current && descTaskIdRef.current) {
+        const tid = descTaskIdRef.current;
+        const text = descValueRef.current;
+        console.log("[DESC] onClose flush:", tid, text.substring(0, 60));
+        persistDescription(tid, text);
       }
       if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
       setTimeout(() => setSelectedTask(null), 0);
@@ -630,19 +605,13 @@ export function TaskDetail() {
               <h3 className="flex items-center gap-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
                 <Pencil className="h-3.5 w-3.5" />Descripción de la tarea
               </h3>
-              <div
-                ref={descRef}
-                contentEditable
-                suppressContentEditableWarning
-                className="min-h-[80px] text-sm leading-relaxed outline-none rounded-lg border border-transparent hover:border-border/50 focus:border-border px-3 py-2 transition-colors empty:before:content-[attr(data-placeholder)] empty:before:text-muted-foreground/40 empty:before:pointer-events-none"
-                data-placeholder="Escribe una descripción, usa Ctrl+B para negrita..."
+              <textarea
+                value={descValue}
+                onChange={onDescChange}
                 onBlur={saveDescription}
-                onInput={autoSaveDescription}
-                onKeyDown={(e) => {
-                  if (e.key === "b" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); document.execCommand("bold"); }
-                  if (e.key === "i" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); document.execCommand("italic"); }
-                  if (e.key === "u" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); document.execCommand("underline"); }
-                }}
+                placeholder="Escribe una descripción..."
+                className="min-h-[80px] w-full text-sm leading-relaxed outline-none rounded-lg border border-transparent hover:border-border/50 focus:border-border px-3 py-2 transition-colors resize-y bg-transparent"
+                rows={4}
               />
             </section>
 
