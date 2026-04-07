@@ -16,8 +16,9 @@ export async function GET(request: Request) {
     });
     if (!membership) return NextResponse.json({ error: "Sin acceso a este workspace" }, { status: 403 });
 
+    // Pages are private — only return pages created by this user
     const pages = await prisma.page.findMany({
-      where: { workspaceId, deletedAt: null },
+      where: { workspaceId, deletedAt: null, createdById: user!.id },
       include: { blocks: { orderBy: { position: "asc" } } },
       orderBy: { position: "asc" },
     });
@@ -42,13 +43,14 @@ export async function POST(request: Request) {
     });
     if (!membership) return NextResponse.json({ error: "Sin acceso a este workspace" }, { status: 403 });
 
-    const count = await prisma.page.count({ where: { workspaceId } });
+    const count = await prisma.page.count({ where: { workspaceId, createdById: user!.id } });
 
     const page = await prisma.page.create({
       data: {
         title: title || "Sin título",
         emoji: emoji || "📄",
         workspaceId,
+        createdById: user!.id,
         parentId: parentId || null,
         isPrivate: isPrivate || false,
         position: count,

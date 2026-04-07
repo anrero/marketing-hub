@@ -55,7 +55,7 @@ export async function POST(request: Request) {
 
     const count = await prisma.board.count({ where: { workspaceId } });
 
-    // Create board — NOT shared with anyone by default (only owner sees it)
+    // Create board with default columns
     const board = await prisma.board.create({
       data: {
         name, emoji: emoji || "📋", workspaceId, position: count,
@@ -70,6 +70,14 @@ export async function POST(request: Request) {
       },
       include: { columns: { orderBy: { position: "asc" } } },
     });
+
+    // Auto-create BoardShare for the creator if they're not the workspace owner
+    const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { ownerId: true } });
+    if (workspace?.ownerId !== user!.id) {
+      await prisma.boardShare.create({
+        data: { boardId: board.id, userId: user!.id, role: "editor", sharedBy: user!.id },
+      });
+    }
 
     return NextResponse.json(board);
   } catch (e) {

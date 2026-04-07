@@ -26,6 +26,7 @@ model User {
 
   tasks        Task[]       @relation("assignee")
   createdTasks Task[]       @relation("creator")
+  createdPages Page[]       @relation("pageCreator")
   comments     Comment[]
   activities   Activity[]
   chatMessages ChatMessage[]
@@ -208,6 +209,8 @@ model Page {
   children    Page[]    @relation("subpages")
   workspaceId String
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdById String?
+  createdBy   User?     @relation("pageCreator", fields: [createdById], references: [id])
   deletedAt   DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
