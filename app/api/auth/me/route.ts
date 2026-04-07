@@ -1,9 +1,14 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getSessionUserId } from "@/lib/session";
 
 export async function GET(request: Request) {
   try {
-    const userId = request.headers.get("x-user-id");
+    // Try cookie first, then header fallback
+    let userId = await getSessionUserId();
+    if (!userId) {
+      userId = request.headers.get("x-user-id");
+    }
     if (!userId) {
       return NextResponse.json({ error: "No autenticado" }, { status: 401 });
     }

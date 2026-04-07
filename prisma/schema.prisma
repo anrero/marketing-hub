@@ -81,6 +81,7 @@ model Task {
   campaignType  String?
   campaignName  String?
   coverImage    String?
+  customFields  Json?
   estimatedTime Float?
   estimatedUnit String?
   realTime      Float?

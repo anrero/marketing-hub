@@ -46,7 +46,17 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
     const { error } = await getAuthUser(request);
     if (error) return error;
     const { id } = await params;
-    await prisma.page.update({ where: { id }, data: { deletedAt: new Date() } });
+    const { searchParams } = new URL(request.url);
+    const hard = searchParams.get("hard") === "true";
+
+    if (hard) {
+      // Hard delete: permanently remove page and its blocks from DB
+      await prisma.block.deleteMany({ where: { pageId: id } });
+      await prisma.page.delete({ where: { id } });
+    } else {
+      // Soft delete
+      await prisma.page.update({ where: { id }, data: { deletedAt: new Date() } });
+    }
     return NextResponse.json({ success: true });
   } catch (e) {
     console.error("Page DELETE error:", e);

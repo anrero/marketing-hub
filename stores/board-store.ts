@@ -70,7 +70,7 @@ interface BoardState {
   updateTaskWithActivity: (taskId: string, updates: Partial<Task>, authorId?: string) => void;
   updateTask: (taskId: string, updates: Partial<Task>) => void;
   addTask: (task: Task) => void;
-  addQuickTask: (title: string) => void;
+  addQuickTask: (title: string, overrides?: { status?: Status; dueDate?: string }) => void;
   addBoard: (name: string) => void;
   renameBoard: (id: string, name: string) => void;
   deleteBoard: (id: string) => void;
@@ -101,6 +101,14 @@ interface BoardState {
   toggleSubtask: (taskId: string, subtaskId: string) => void;
   removeSubtask: (taskId: string, subtaskId: string) => void;
   reorderSubtasks: (taskId: string, subtasks: Subtask[]) => void;
+  // Comments
+  addComment: (taskId: string, content: string) => void;
+  // Tags (relation-safe)
+  addTaskTag: (taskId: string, tagId: string) => void;
+  removeTaskTag: (taskId: string, tagId: string) => void;
+  // Dependencies (relation-safe)
+  addDependency: (taskId: string, blockerTaskId: string) => void;
+  removeDependency: (taskId: string, blockerTaskId: string) => void;
   // Reminder
   setReminder: (taskId: string, reminder: ReminderOption) => void;
   // Bulk actions
@@ -317,7 +325,7 @@ function transformApiBoard(apiBoard: any, taskIds: string[]): Board {
     columns: (apiBoard.columns || []).map((c: { id: string; name: string; color?: string }) => ({
       id: columnNameToStatusId(c.name),
       title: c.name,
-      // Don't pass server hex colors — let the frontend use its own Tailwind-based columnAccents
+      serverId: c.id, // Keep the real server UUID for API calls
     })),
     taskIds,
   };
@@ -499,7 +507,9 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     // Persist relevant fields + activity to server
     const serverUpdates: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(updates)) {
-      if (["activity", "comments", "attachments", "urls", "subtasks"].includes(key)) continue;
+      if (["activity", "comments", "attachments", "urls", "subtasks", "tags", "blockedBy"].includes(key)) continue;
+      if (key === "actualTime") { serverUpdates.realTime = value; continue; }
+      if (key === "actualUnit") { serverUpdates.realUnit = value; continue; }
       if (key === "dueDate" && value) serverUpdates.dueDate = value;
       else serverUpdates[key] = value;
     }
@@ -518,7 +528,9 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     // Persist relevant fields to server
     const serverUpdates: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(updates)) {
-      if (["activity", "comments", "attachments", "urls", "subtasks"].includes(key)) continue;
+      if (["activity", "comments", "attachments", "urls", "subtasks", "tags", "blockedBy"].includes(key)) continue;
+      if (key === "actualTime") { serverUpdates.realTime = value; continue; }
+      if (key === "actualUnit") { serverUpdates.realUnit = value; continue; }
       if (key === "dueDate" && value) serverUpdates.dueDate = value;
       else serverUpdates[key] = value;
     }
@@ -572,11 +584,13 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     }).catch((e) => console.error("API create task error:", e));
   },
 
-  addQuickTask: (title) => {
+  addQuickTask: (title, overrides?: { status?: Status; dueDate?: string }) => {
     const newId = `t${Date.now()}`;
+    const status = overrides?.status || "por_hacer";
+    const dueDate = overrides?.dueDate || new Date().toISOString().split("T")[0];
     const newTask: Task = {
-      id: newId, title, status: "por_hacer", priority: "media", store: "", assigneeId: getCurrentUserId(),
-      campaignType: "", campaignName: "", adAccount: "", dueDate: new Date().toISOString().split("T")[0],
+      id: newId, title, status, priority: "media", store: "", assigneeId: getCurrentUserId(),
+      campaignType: "", campaignName: "", adAccount: "", dueDate,
       urls: [], attachments: [], comments: [], activity: [
         { id: `a${Date.now()}_create`, authorId: getCurrentUserId(), action: "creó la tarea", createdAt: new Date().toISOString() }
       ], subtasks: [],
@@ -585,7 +599,7 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
       tasks: [...state.tasks, newTask],
       boards: state.boards.map((b) => b.id === state.activeBoardId ? { ...b, taskIds: [...b.taskIds, newId] } : b),
     }));
-    // Persist to server
+    // Persist to server — include status and dueDate in the initial POST to avoid race condition
     const state = get();
     fetch("/api/tasks", {
       method: "POST",
@@ -593,9 +607,9 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
       body: JSON.stringify({
         boardId: state.activeBoardId,
         title,
-        status: "por_hacer",
+        status,
         priority: "media",
-        dueDate: new Date().toISOString().split("T")[0],
+        dueDate,
       }),
     }).then((r) => r.json()).then((saved) => {
       set((s) => ({
@@ -699,7 +713,7 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     set((s) => ({ tasks: s.tasks.map((t) => t.id === taskId ? { ...t, attachments: t.attachments.filter((_, i) => i !== index) } : t) }));
     // Delete from server if it has an id
     if (att?.id) {
-      fetch(`/api/attachments?id=${att.id}`, { method: "DELETE" }).catch((e) => console.error("API delete attachment error:", e));
+      fetch(`/api/attachments?id=${att.id}`, { method: "DELETE", headers: getAuthHeaders() }).catch((e) => console.error("API delete attachment error:", e));
     }
   },
 
@@ -751,39 +765,44 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     const s = get();
     const board = s.boards.find((b) => b.id === s.activeBoardId);
     if (!board) return;
+    const col = board.columns.find((c) => c.id === columnId);
+    const realId = col?.serverId || columnId;
     set((st) => ({
       boards: st.boards.map((b) => b.id === st.activeBoardId ? { ...b, columns: b.columns.filter((c) => c.id !== columnId) } : b),
       tasks: st.tasks.map((t) => board.taskIds.includes(t.id) && t.status === columnId as Status ? { ...t, status: "por_hacer" as Status } : t),
     }));
-    // Find the real server column ID — we need to search by name
-    const col = board.columns.find((c) => c.id === columnId);
-    if (col) {
-      // Column IDs in frontend are status strings, so we need to find by board + name
-      fetch(`/api/columns?id=${columnId}`, { method: "DELETE" }).catch(() => {
-        // If status-based ID fails, the column was a server column — try by board refresh
-      });
-    }
+    // Use the real server UUID for the delete
+    fetch(`/api/columns?id=${realId}`, { method: "DELETE", headers: getAuthHeaders() })
+      .catch((e) => console.error("API delete column error:", e));
   },
 
   renameColumn: (columnId, title) => {
-    set((s) => ({
-      boards: s.boards.map((b) => b.id === s.activeBoardId ? { ...b, columns: b.columns.map((c) => c.id === columnId ? { ...c, title } : c) } : b),
+    const s = get();
+    const board = s.boards.find((b) => b.id === s.activeBoardId);
+    const col = board?.columns.find((c) => c.id === columnId);
+    const realId = col?.serverId || columnId;
+    set((st) => ({
+      boards: st.boards.map((b) => b.id === st.activeBoardId ? { ...b, columns: b.columns.map((c) => c.id === columnId ? { ...c, title } : c) } : b),
     }));
     fetch("/api/columns", {
       method: "PATCH",
       headers: getAuthHeaders(),
-      body: JSON.stringify({ id: columnId, name: title }),
+      body: JSON.stringify({ id: realId, name: title }),
     }).catch((e) => console.error("API rename column error:", e));
   },
 
   setColumnColor: (columnId, color) => {
-    set((s) => ({
-      boards: s.boards.map((b) => b.id === s.activeBoardId ? { ...b, columns: b.columns.map((c) => c.id === columnId ? { ...c, color } : c) } : b),
+    const s = get();
+    const board = s.boards.find((b) => b.id === s.activeBoardId);
+    const col = board?.columns.find((c) => c.id === columnId);
+    const realId = col?.serverId || columnId;
+    set((st) => ({
+      boards: st.boards.map((b) => b.id === st.activeBoardId ? { ...b, columns: b.columns.map((c) => c.id === columnId ? { ...c, color } : c) } : b),
     }));
     fetch("/api/columns", {
       method: "PATCH",
       headers: getAuthHeaders(),
-      body: JSON.stringify({ id: columnId, color }),
+      body: JSON.stringify({ id: realId, color }),
     }).catch((e) => console.error("API set column color error:", e));
   },
 
@@ -907,6 +926,47 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
 
   reorderSubtasks: (taskId, subtasks) =>
     set((state) => ({ tasks: state.tasks.map((t) => t.id === taskId ? { ...t, subtasks } : t) })),
+
+  // ── Comments ──
+  addComment: (taskId: string, content: string) => {
+    const userId = getCurrentUserId();
+    const tempId = `c${Date.now()}`;
+    const allMembers = get().getAllTeamMembers();
+    const author = allMembers.find((m) => m.id === userId);
+    const newComment = { id: tempId, authorId: userId, authorName: author?.name || "Tú", content, createdAt: new Date().toISOString() };
+    set((state) => ({
+      tasks: state.tasks.map((t) => t.id === taskId ? { ...t, comments: [...t.comments, newComment] } : t),
+    }));
+    apiPatchTask(taskId, { _addComment: { content, authorId: userId } });
+  },
+
+  // ── Tags (relation-safe) ──
+  addTaskTag: (taskId: string, tagId: string) => {
+    set((state) => ({
+      tasks: state.tasks.map((t) => t.id === taskId ? { ...t, tags: [...(t.tags ?? []).filter((id) => id !== tagId), tagId] } : t),
+    }));
+    apiPatchTask(taskId, { _addTag: tagId });
+  },
+  removeTaskTag: (taskId: string, tagId: string) => {
+    set((state) => ({
+      tasks: state.tasks.map((t) => t.id === taskId ? { ...t, tags: (t.tags ?? []).filter((id) => id !== tagId) } : t),
+    }));
+    apiPatchTask(taskId, { _removeTag: tagId });
+  },
+
+  // ── Dependencies (relation-safe) ──
+  addDependency: (taskId: string, blockerTaskId: string) => {
+    set((state) => ({
+      tasks: state.tasks.map((t) => t.id === taskId ? { ...t, blockedBy: [...(t.blockedBy ?? []).filter((id) => id !== blockerTaskId), blockerTaskId] } : t),
+    }));
+    apiPatchTask(taskId, { _addDependency: blockerTaskId });
+  },
+  removeDependency: (taskId: string, blockerTaskId: string) => {
+    set((state) => ({
+      tasks: state.tasks.map((t) => t.id === taskId ? { ...t, blockedBy: (t.blockedBy ?? []).filter((id) => id !== blockerTaskId) } : t),
+    }));
+    apiPatchTask(taskId, { _removeDependency: blockerTaskId });
+  },
 
   setReminder: (taskId, reminder) => {
     set((state) => ({ tasks: state.tasks.map((t) => t.id === taskId ? { ...t, reminder } : t) }));

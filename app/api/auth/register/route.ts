@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import bcrypt from "bcryptjs";
+import { createSessionToken, sessionCookieOptions } from "@/lib/session";
 
 export async function POST(request: Request) {
   try {
@@ -62,7 +63,9 @@ export async function POST(request: Request) {
       });
     }
 
-    return NextResponse.json({
+    // Create signed JWT token and set as httpOnly cookie
+    const token = createSessionToken(user.id);
+    const response = NextResponse.json({
       id: user.id,
       name: user.name,
       email: user.email,
@@ -70,6 +73,17 @@ export async function POST(request: Request) {
       avatarColor: user.avatarColor,
       workspaceId: user.workspaceId,
     });
+
+    const cookieOpts = sessionCookieOptions(token);
+    response.cookies.set(cookieOpts.name, cookieOpts.value, {
+      httpOnly: cookieOpts.httpOnly,
+      secure: cookieOpts.secure,
+      sameSite: cookieOpts.sameSite,
+      path: cookieOpts.path,
+      maxAge: cookieOpts.maxAge,
+    });
+
+    return response;
   } catch (e) {
     console.error("Register error:", e);
     return NextResponse.json({ error: "Error interno del servidor" }, { status: 500 });

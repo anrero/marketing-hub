@@ -46,7 +46,7 @@ interface KanbanColumnProps {
 
 export function KanbanColumn({ column, tasks }: KanbanColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id: column.id });
-  const { filterStore, filterPriority, filterAssignee, getBoardTasks, addQuickTask, updateTask, archiveCompleted, getArchivedTasks, addColumn, removeColumn, renameColumn: renameCol, setColumnColor } =
+  const { filterStore, filterPriority, filterAssignee, getBoardTasks, addQuickTask, archiveCompleted, getArchivedTasks, addColumn, removeColumn, renameColumn: renameCol, setColumnColor } =
     useBoardStore();
 
   const [renamingCol, setRenamingCol] = useState(false);
@@ -86,14 +86,7 @@ export function KanbanColumn({ column, tasks }: KanbanColumnProps) {
 
   const handleCreate = () => {
     if (!newTitle.trim()) return;
-    addQuickTask(newTitle.trim());
-    // The quick task is created with status "por_hacer" by default,
-    // update it to this column's status if different
-    const store = useBoardStore.getState();
-    const lastTask = store.tasks[store.tasks.length - 1];
-    if (lastTask && column.id !== "por_hacer") {
-      updateTask(lastTask.id, { status: column.id as "por_hacer" | "en_proceso" | "en_revision" | "completado" });
-    }
+    addQuickTask(newTitle.trim(), { status: column.id as "por_hacer" | "en_proceso" | "en_revision" | "completado" });
     toast.success("Tarea creada");
     setNewTitle("");
     // Keep input open for fast multi-creation

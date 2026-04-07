@@ -93,16 +93,11 @@ export function CalendarView() {
   const getFilteredTasks = useBoardStore((s) => s.getFilteredTasks);
   const setSelectedTask = useBoardStore((s) => s.setSelectedTask);
   const addQuickTask = useBoardStore((s) => s.addQuickTask);
-  const updateTask = useBoardStore((s) => s.updateTask);
 
   const handleDayClick = (dateStr: string) => {
     const title = prompt("Nombre de la tarea:");
     if (!title?.trim()) return;
-    addQuickTask(title.trim());
-    // Set due date on the newly created task
-    const s = useBoardStore.getState();
-    const lastTask = s.tasks[s.tasks.length - 1];
-    if (lastTask) updateTask(lastTask.id, { dueDate: dateStr });
+    addQuickTask(title.trim(), { dueDate: dateStr });
     toast.success("Tarea creada");
   };
 

@@ -79,7 +79,7 @@ export function TaskCard({ task }: { task: Task }) {
       </button>
 
       {/* Title */}
-      <p className="mb-2.5 pr-6 text-sm font-medium leading-snug" dangerouslySetInnerHTML={{ __html: task.title }} />
+      <p className="mb-2.5 pr-6 text-sm font-medium leading-snug">{task.title.replace(/<[^>]*>/g, "")}</p>
 
       {/* Badges */}
       <div className="mb-3 flex flex-wrap gap-1.5">

@@ -113,6 +113,7 @@ export interface Column {
   id: string;
   title: string;
   color?: string;
+  serverId?: string; // Real server UUID for API calls
 }
 
 export interface Board {

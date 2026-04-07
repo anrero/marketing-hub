@@ -47,6 +47,33 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       delete data._addActivity;
     }
 
+    // Handle tags (relation-safe)
+    if (data._addTag) {
+      await prisma.taskTag.upsert({
+        where: { taskId_tagId: { taskId: id, tagId: data._addTag } },
+        create: { taskId: id, tagId: data._addTag },
+        update: {},
+      });
+      delete data._addTag;
+    }
+    if (data._removeTag) {
+      await prisma.taskTag.deleteMany({ where: { taskId: id, tagId: data._removeTag } });
+      delete data._removeTag;
+    }
+
+    // Handle dependencies (relation-safe)
+    if (data._addDependency) {
+      const exists = await prisma.taskDependency.findFirst({ where: { blockedId: id, blockerId: data._addDependency } });
+      if (!exists) {
+        await prisma.taskDependency.create({ data: { blockedId: id, blockerId: data._addDependency } });
+      }
+      delete data._addDependency;
+    }
+    if (data._removeDependency) {
+      await prisma.taskDependency.deleteMany({ where: { blockedId: id, blockerId: data._removeDependency } });
+      delete data._removeDependency;
+    }
+
     // Handle URL
     if (data._addUrl) {
       await prisma.taskUrl.create({ data: { url: data._addUrl, taskId: id } });
@@ -66,6 +93,13 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     delete cleanData._addActivity;
     delete cleanData._addUrl;
     delete cleanData._removeUrl;
+    delete cleanData._addTag;
+    delete cleanData._removeTag;
+    delete cleanData._addDependency;
+    delete cleanData._removeDependency;
+    // Remove relation fields that cannot be set as scalars
+    delete cleanData.tags;
+    delete cleanData.blockedBy;
 
     // Only update task if there are remaining fields
     if (Object.keys(cleanData).length > 0) {

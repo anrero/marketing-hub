@@ -88,14 +88,16 @@ export const useAuthStore = create<AuthState>()(persist((set, get) => ({
   },
 
   logout: () => {
-    // 1. Wipe ALL app data from localStorage FIRST
+    // 1. Clear server-side session cookie
+    fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    // 2. Wipe ALL app data from localStorage
     try {
       localStorage.removeItem("mh-auth-storage");
       localStorage.removeItem("mh-board-storage");
       localStorage.removeItem("mh-sidebar-storage");
       localStorage.removeItem("mh-table-columns-storage");
     } catch { /* ignore */ }
-    // 2. Hard reload — nukes all React state, Zustand memory, and persist rehydration
+    // 3. Hard reload — nukes all React state, Zustand memory, and persist rehydration
     window.location.href = "/";
   },
 
@@ -104,9 +106,7 @@ export const useAuthStore = create<AuthState>()(persist((set, get) => ({
     if (!state.currentUser) return false;
     set({ isCheckingSession: true });
     try {
-      const res = await fetch("/api/auth/me", {
-        headers: { "x-user-id": state.currentUser.id },
-      });
+      const res = await fetch("/api/auth/me");
       if (!res.ok) {
         set({ currentUser: null, isCheckingSession: false });
         return false;
@@ -137,7 +137,7 @@ export const useAuthStore = create<AuthState>()(persist((set, get) => ({
     // Persist to server
     fetch("/api/users", {
       method: "PATCH",
-      headers: { "Content-Type": "application/json", "x-user-id": state.currentUser.id },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(updates),
     }).catch((e) => console.error("API update profile error:", e));
   },

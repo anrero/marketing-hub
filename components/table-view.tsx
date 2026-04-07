@@ -457,7 +457,7 @@ function TitleCell({ task, onSave, cellId, flashId }: { task: Task; onSave: (v: 
   if (editing) return <RichTitleEditor html={task.title} onSave={(h) => { setEditing(false); if (h !== task.title) onSave(h); }} onCancel={() => setEditing(false)} />;
   return (
     <CellTooltip text={task.title.replace(/<[^>]*>/g, "")}>
-      <span onClick={(e) => { e.stopPropagation(); setEditing(true); }} className={cn("block cursor-text truncate rounded px-1.5 py-0.5 text-xs transition-all hover:bg-muted", flashId === cellId && "ring-2 ring-blue-500/50 bg-blue-500/10")} dangerouslySetInnerHTML={{ __html: task.title }} />
+      <span onClick={(e) => { e.stopPropagation(); setEditing(true); }} className={cn("block cursor-text truncate rounded px-1.5 py-0.5 text-xs transition-all hover:bg-muted", flashId === cellId && "ring-2 ring-blue-500/50 bg-blue-500/10")}>{task.title.replace(/<[^>]*>/g, "")}</span>
     </CellTooltip>
   );
 }

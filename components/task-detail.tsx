@@ -111,6 +111,7 @@ export function TaskDetail() {
     addSubtask, toggleSubtask, removeSubtask, reorderSubtasks, setReminder,
     getAllTags, archiveTask, unarchiveTask, duplicateTask, deleteTask,
     addTaskUrl, removeTaskUrl,
+    addComment: storeAddComment, addTaskTag, removeTaskTag, addDependency, removeDependency,
   } = useBoardStore();
 
   const { toggleFavorite, isFavorite } = useSidebarStore();
@@ -225,7 +226,7 @@ export function TaskDetail() {
   const removeUrl = (urlId: string) => { removeTaskUrl(task.id, urlId); };
   const addComment = () => {
     if (!newComment.trim()) return;
-    updateTask(task.id, { comments: [...task.comments, { id: `c${Date.now()}`, authorId: "u1", content: newComment.trim(), createdAt: new Date().toISOString() }] });
+    storeAddComment(task.id, newComment.trim());
     setNewComment("");
     toast.success("Comentario agregado");
   };
@@ -450,8 +451,8 @@ export function TaskDetail() {
                     const isActive = (task.tags ?? []).includes(tag.id);
                     return (
                       <button key={tag.id} onClick={() => {
-                        const current = task.tags ?? [];
-                        updateTask(task.id, { tags: isActive ? current.filter((t) => t !== tag.id) : [...current, tag.id] });
+                        if (isActive) removeTaskTag(task.id, tag.id);
+                        else addTaskTag(task.id, tag.id);
                       }} className={cn("rounded-full px-2 py-0.5 text-[10px] border transition-colors", isActive ? "text-white border-transparent" : "border-border text-muted-foreground hover:bg-muted")}
                         style={isActive ? { backgroundColor: tag.color } : {}}>
                         {tag.name}
@@ -468,11 +469,11 @@ export function TaskDetail() {
                     return bt ? (
                       <div key={bid} className="flex items-center gap-1 text-[10px]">
                         <span className={cn("truncate flex-1", bt.status === "completado" && "line-through text-muted-foreground")}>{bt.title.replace(/<[^>]*>/g, "")}</span>
-                        <button onClick={() => updateTask(task.id, { blockedBy: (task.blockedBy ?? []).filter((x) => x !== bid) })} className="text-red-400 hover:text-red-500">&times;</button>
+                        <button onClick={() => removeDependency(task.id, bid)} className="text-red-400 hover:text-red-500">&times;</button>
                       </div>
                     ) : null;
                   })}
-                  <select onChange={(e) => { if (e.target.value) { updateTask(task.id, { blockedBy: [...(task.blockedBy ?? []), e.target.value] }); e.target.value = ""; } }}
+                  <select onChange={(e) => { if (e.target.value) { addDependency(task.id, e.target.value); e.target.value = ""; } }}
                     className="w-full h-6 text-[10px] bg-transparent border-none outline-none text-muted-foreground cursor-pointer">
                     <option value="">+ Agregar dependencia...</option>
                     {tasks.filter((t) => t.id !== task.id && !(task.blockedBy ?? []).includes(t.id)).map((t) => (

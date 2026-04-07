@@ -443,22 +443,45 @@ export const useSidebarStore = create<SidebarState>()(persist((set, get) => ({
     apiUpdatePage(id, { parentId: newParentId, isPrivate });
   },
 
-  addWorkspace: (name, emoji) => set((s) => ({
-    workspaces: [...s.workspaces, { id: `ws_${Date.now()}`, name, emoji }],
-  })),
+  addWorkspace: (name, emoji) => {
+    const tempId = `ws_${Date.now()}`;
+    set((s) => ({
+      workspaces: [...s.workspaces, { id: tempId, name, emoji }],
+    }));
+    fetch("/api/workspace", {
+      method: "POST",
+      headers: getSidebarAuthHeaders(),
+      body: JSON.stringify({ name, emoji }),
+    }).then((r) => r.json()).then((saved) => {
+      set((s) => ({
+        workspaces: s.workspaces.map((w) => w.id === tempId ? { ...w, id: saved.id } : w),
+        activeWorkspaceId: s.activeWorkspaceId === tempId ? saved.id : s.activeWorkspaceId,
+      }));
+    }).catch((e) => console.error("API create workspace error:", e));
+  },
 
-  removeWorkspace: (id) => set((s) => {
-    if (s.workspaces.length <= 1) return s;
+  removeWorkspace: (id) => {
+    const s = get();
+    if (s.workspaces.length <= 1) return;
     const remaining = s.workspaces.filter((w) => w.id !== id);
-    return {
+    set({
       workspaces: remaining,
       activeWorkspaceId: s.activeWorkspaceId === id ? remaining[0].id : s.activeWorkspaceId,
-    };
-  }),
+    });
+    fetch(`/api/workspace?id=${id}`, { method: "DELETE", headers: getSidebarAuthHeaders(false) })
+      .catch((e) => console.error("API delete workspace error:", e));
+  },
 
-  renameWorkspace: (id, name, emoji) => set((s) => ({
-    workspaces: s.workspaces.map((w) => w.id === id ? { ...w, name, ...(emoji ? { emoji } : {}) } : w),
-  })),
+  renameWorkspace: (id, name, emoji) => {
+    set((s) => ({
+      workspaces: s.workspaces.map((w) => w.id === id ? { ...w, name, ...(emoji ? { emoji } : {}) } : w),
+    }));
+    fetch("/api/workspace", {
+      method: "PATCH",
+      headers: getSidebarAuthHeaders(),
+      body: JSON.stringify({ id, name, ...(emoji ? { emoji } : {}) }),
+    }).catch((e) => console.error("API rename workspace error:", e));
+  },
 
   inviteOpen: false,
   setInviteOpen: (open) => set({ inviteOpen: open }),
@@ -502,6 +525,10 @@ export const useSidebarStore = create<SidebarState>()(persist((set, get) => ({
     if (item.type === "page") {
       const restoredPages = (item.data as PageNode[]) ?? [];
       set({ trash: s.trash.filter((t) => t.id !== id), pages: [...s.pages, ...restoredPages] });
+      // Clear deletedAt on server for all restored pages
+      for (const rp of restoredPages) {
+        apiUpdatePage(rp.id, { deletedAt: null });
+      }
       return;
     }
     if (item.type === "task") {
@@ -523,11 +550,40 @@ export const useSidebarStore = create<SidebarState>()(persist((set, get) => ({
     set({ trash: s.trash.filter((t) => t.id !== id) });
   },
 
-  permanentlyDelete: (id) => set((s) => ({
-    trash: s.trash.filter((t) => t.id !== id),
-  })),
+  permanentlyDelete: (id) => {
+    const s = get();
+    const item = s.trash.find((t) => t.id === id);
+    set({ trash: s.trash.filter((t) => t.id !== id) });
+    // Hard-delete from server
+    if (item) {
+      if (item.type === "page") {
+        const pages = (item.data as PageNode[]) ?? [];
+        // Delete children first (reverse order), then parent
+        for (const p of [...pages].reverse()) {
+          fetch(`/api/pages/${p.id}?hard=true`, { method: "DELETE", headers: getSidebarAuthHeaders(false) })
+            .catch((e) => console.error("API hard delete page error:", e));
+        }
+      } else if (item.type === "task") {
+        // Tasks use soft-delete already via apiDeleteTask, and the undo mechanism handles restore
+        // A permanent delete for tasks would need a hard-delete endpoint too, but for now this is fine
+      }
+    }
+  },
 
-  emptyTrash: () => set({ trash: [] }),
+  emptyTrash: () => {
+    const s = get();
+    // Hard-delete all items in trash from server
+    for (const item of s.trash) {
+      if (item.type === "page") {
+        const pages = (item.data as PageNode[]) ?? [];
+        for (const p of [...pages].reverse()) {
+          fetch(`/api/pages/${p.id}?hard=true`, { method: "DELETE", headers: getSidebarAuthHeaders(false) })
+            .catch((e) => console.error("API hard delete page error:", e));
+        }
+      }
+    }
+    set({ trash: [] });
+  },
 
   // Page templates
   pageTemplates: [
