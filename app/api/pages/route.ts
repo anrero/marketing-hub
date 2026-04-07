@@ -4,11 +4,17 @@ import { getAuthUser } from "@/lib/auth";
 
 export async function GET(request: Request) {
   try {
-    const { error } = await getAuthUser(request);
+    const { user, error } = await getAuthUser(request);
     if (error) return error;
     const { searchParams } = new URL(request.url);
     const workspaceId = searchParams.get("workspaceId");
     if (!workspaceId) return NextResponse.json({ error: "workspaceId requerido" }, { status: 400 });
+
+    // Verify user is a workspace member
+    const membership = await prisma.workspaceMember.findUnique({
+      where: { workspaceId_userId: { workspaceId, userId: user!.id } },
+    });
+    if (!membership) return NextResponse.json({ error: "Sin acceso a este workspace" }, { status: 403 });
 
     const pages = await prisma.page.findMany({
       where: { workspaceId, deletedAt: null },
@@ -25,10 +31,16 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const { error } = await getAuthUser(request);
+    const { user, error } = await getAuthUser(request);
     if (error) return error;
     const { title, emoji, workspaceId, parentId, isPrivate } = await request.json();
     if (!workspaceId) return NextResponse.json({ error: "workspaceId requerido" }, { status: 400 });
+
+    // Verify user is a workspace member
+    const membership = await prisma.workspaceMember.findUnique({
+      where: { workspaceId_userId: { workspaceId, userId: user!.id } },
+    });
+    if (!membership) return NextResponse.json({ error: "Sin acceso a este workspace" }, { status: 403 });
 
     const count = await prisma.page.count({ where: { workspaceId } });
 

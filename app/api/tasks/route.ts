@@ -1,14 +1,20 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getAuthUser } from "@/lib/auth";
+import { getAuthUser, checkBoardAccess } from "@/lib/auth";
 
 export async function GET(request: Request) {
   try {
-    const { error } = await getAuthUser(request);
+    const { user, error } = await getAuthUser(request);
     if (error) return error;
     const { searchParams } = new URL(request.url);
     const boardId = searchParams.get("boardId");
     if (!boardId) return NextResponse.json({ error: "boardId requerido" }, { status: 400 });
+
+    // Permission check: WorkspaceMember OR BoardShare
+    const access = await checkBoardAccess(user!.id, boardId);
+    if (!access.hasAccess) {
+      return NextResponse.json({ error: "Sin acceso al tablero" }, { status: 403 });
+    }
 
     const tasks = await prisma.task.findMany({
       where: { boardId, deletedAt: null },
@@ -34,12 +40,21 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const { error } = await getAuthUser(request);
+    const { user, error } = await getAuthUser(request);
     if (error) return error;
     const data = await request.json();
     const { boardId, title, status, priority, store, assigneeId, campaignType, campaignName, adAccount, dueDate, createdById } = data;
 
     if (!boardId || !title) return NextResponse.json({ error: "boardId y title requeridos" }, { status: 400 });
+
+    // Permission check: WorkspaceMember OR BoardShare with role != "viewer"
+    const access = await checkBoardAccess(user!.id, boardId);
+    if (!access.hasAccess) {
+      return NextResponse.json({ error: "Sin acceso al tablero" }, { status: 403 });
+    }
+    if (access.role === "viewer") {
+      return NextResponse.json({ error: "Sin permisos de edición" }, { status: 403 });
+    }
 
     const count = await prisma.task.count({ where: { boardId } });
 

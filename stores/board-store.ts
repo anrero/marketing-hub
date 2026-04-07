@@ -322,6 +322,7 @@ function transformApiBoard(apiBoard: any, taskIds: string[]): Board {
   return {
     id: apiBoard.id,
     name: apiBoard.name,
+    workspaceId: apiBoard.workspaceId,
     columns: (apiBoard.columns || []).map((c: { id: string; name: string; color?: string }) => ({
       id: columnNameToStatusId(c.name),
       title: c.name,
@@ -362,7 +363,7 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
       // 1. Fetch boards + workspace members in parallel
       const authH = { headers: getAuthHeaders() };
       const [boardsRes, wsRes] = await Promise.all([
-        fetch(`/api/boards?workspaceId=${workspaceId}`, authH),
+        fetch("/api/boards", authH),
         fetch(`/api/workspace?workspaceId=${workspaceId}`, authH),
       ]);
       if (!boardsRes.ok) {
@@ -427,7 +428,7 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
   // ── Refresh without resetting UI state ──
   refreshFromServer: async (workspaceId: string) => {
     try {
-      const boardsRes = await fetch(`/api/boards?workspaceId=${workspaceId}`, { headers: getAuthHeaders() });
+      const boardsRes = await fetch("/api/boards", { headers: getAuthHeaders() });
       if (!boardsRes.ok) return;
       const apiBoards = await boardsRes.json();
 

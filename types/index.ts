@@ -121,4 +121,5 @@ export interface Board {
   name: string;
   columns: Column[];
   taskIds: string[];
+  workspaceId?: string;
 }

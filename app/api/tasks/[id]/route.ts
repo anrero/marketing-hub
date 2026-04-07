@@ -1,12 +1,24 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getAuthUser } from "@/lib/auth";
+import { getAuthUser, checkBoardAccess } from "@/lib/auth";
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const { error } = await getAuthUser(request);
+    const { user, error } = await getAuthUser(request);
     if (error) return error;
     const { id } = await params;
+
+    // Permission check: get the task's board, then verify access
+    const existingTask = await prisma.task.findUnique({ where: { id }, select: { boardId: true } });
+    if (!existingTask) return NextResponse.json({ error: "Tarea no encontrada" }, { status: 404 });
+    const access = await checkBoardAccess(user!.id, existingTask.boardId);
+    if (!access.hasAccess) {
+      return NextResponse.json({ error: "Sin acceso al tablero" }, { status: 403 });
+    }
+    if (access.role === "viewer") {
+      return NextResponse.json({ error: "Sin permisos de edición" }, { status: 403 });
+    }
+
     const data = await request.json();
 
     // Handle dueDate conversion
@@ -130,9 +142,21 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
 export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const { error } = await getAuthUser(request);
+    const { user, error } = await getAuthUser(request);
     if (error) return error;
     const { id } = await params;
+
+    // Permission check: get the task's board, then verify access
+    const existingTask = await prisma.task.findUnique({ where: { id }, select: { boardId: true } });
+    if (!existingTask) return NextResponse.json({ error: "Tarea no encontrada" }, { status: 404 });
+    const access = await checkBoardAccess(user!.id, existingTask.boardId);
+    if (!access.hasAccess) {
+      return NextResponse.json({ error: "Sin acceso al tablero" }, { status: 403 });
+    }
+    if (access.role === "viewer") {
+      return NextResponse.json({ error: "Sin permisos de edición" }, { status: 403 });
+    }
+
     // Soft delete
     await prisma.task.update({ where: { id }, data: { deletedAt: new Date() } });
     return NextResponse.json({ success: true });

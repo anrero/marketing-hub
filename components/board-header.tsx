@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useMemo } from "react";
 import type { Task } from "@/types";
-import { Plus, LayoutGrid, Table, X, Search, Sun, Moon, Bell, CalendarDays, ChevronRight, Image, GanttChart } from "lucide-react";
+import { Plus, LayoutGrid, Table, X, Search, Sun, Moon, Bell, CalendarDays, ChevronRight, Image, GanttChart, UserPlus, Trash2 } from "lucide-react";
 import { useSidebarStore } from "@/stores/sidebar-store";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
@@ -13,8 +13,11 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useBoardStore } from "@/stores/board-store";
 import { PRIORITIES } from "@/lib/mock-data";
+import { toast } from "sonner";
 
 export function BoardHeader() {
   const {
@@ -48,6 +51,62 @@ export function BoardHeader() {
   const allStores = getAllStores();
   const allMembers = getAllTeamMembers();
   const overdueTasks = getOverdueTasks();
+
+  // Share dialog state
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareEmail, setShareEmail] = useState("");
+  const [shareRole, setShareRole] = useState("editor");
+  const [shareList, setShareList] = useState<{ id: string; userId: string; role: string; user: { id: string; name: string; email: string; avatarColor?: string } }[]>([]);
+  const [shareLoading, setShareLoading] = useState(false);
+
+  const loadShareList = async () => {
+    if (!activeBoardId) return;
+    try {
+      const res = await fetch(`/api/boards/${activeBoardId}/share`);
+      if (res.ok) setShareList(await res.json());
+    } catch { /* ignore */ }
+  };
+
+  useEffect(() => { if (shareOpen) loadShareList(); }, [shareOpen, activeBoardId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleShare = async () => {
+    if (!shareEmail.trim() || !activeBoardId) return;
+    setShareLoading(true);
+    try {
+      const res = await fetch(`/api/boards/${activeBoardId}/share`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: shareEmail.trim(), role: shareRole }),
+      });
+      if (res.ok) {
+        toast.success(`Board compartido con ${shareEmail.trim()}`);
+        setShareEmail("");
+        loadShareList();
+      } else {
+        const err = await res.json();
+        toast.error(err.error || "Error al compartir");
+      }
+    } catch { toast.error("Error de conexión"); }
+    setShareLoading(false);
+  };
+
+  const handleRemoveShare = async (userId: string) => {
+    if (!activeBoardId) return;
+    try {
+      const res = await fetch(`/api/boards/${activeBoardId}/share`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId }),
+      });
+      if (res.ok) {
+        toast.success("Acceso removido");
+        loadShareList();
+      } else {
+        const err = await res.json();
+        toast.error(err.error || "Error al remover acceso");
+      }
+    } catch { toast.error("Error de conexión"); }
+  };
 
   // Board stats
   const boardTasks = useMemo(() => {
@@ -222,12 +281,61 @@ export function BoardHeader() {
             </Button>
           </div>
 
+          <Button size="sm" variant="outline" className="h-8" onClick={() => setShareOpen(true)}>
+            <UserPlus className="h-4 w-4 md:mr-1.5" />
+            <span className="hidden md:inline">Compartir</span>
+          </Button>
+
           <Button size="sm" className="h-8" onClick={() => setNewTaskDialogOpen(true)}>
             <Plus className="h-4 w-4 md:mr-1.5" />
             <span className="hidden md:inline">Nueva Tarea</span>
           </Button>
         </div>
       </div>
+
+      {/* Share Dialog */}
+      <Dialog open={shareOpen} onOpenChange={setShareOpen}>
+        <DialogContent className="sm:max-w-[440px]">
+          <DialogHeader>
+            <DialogTitle>Compartir &ldquo;{activeBoard?.name}&rdquo;</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="flex gap-2">
+              <Input value={shareEmail} onChange={(e) => setShareEmail(e.target.value)} placeholder="Email del usuario..." className="flex-1 h-9 text-sm"
+                onKeyDown={(e) => { if (e.key === "Enter") handleShare(); }} />
+              <Select value={shareRole} onValueChange={setShareRole}>
+                <SelectTrigger className="w-[110px] h-9 text-xs"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="editor">Editor</SelectItem>
+                  <SelectItem value="viewer">Solo lectura</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button size="sm" className="h-9" onClick={handleShare} disabled={shareLoading || !shareEmail.trim()}>
+                Invitar
+              </Button>
+            </div>
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-muted-foreground">Personas con acceso</p>
+              {shareList.length === 0 && <p className="text-xs text-muted-foreground py-2">Solo miembros del workspace tienen acceso</p>}
+              {shareList.map((share) => (
+                <div key={share.id} className="flex items-center gap-2 py-1">
+                  <Avatar className="h-7 w-7">
+                    <AvatarFallback className="text-[10px]" style={{ backgroundColor: share.user.avatarColor }}>{share.user.name.split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 2)}</AvatarFallback>
+                  </Avatar>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm truncate">{share.user.name}</p>
+                    <p className="text-[10px] text-muted-foreground truncate">{share.user.email}</p>
+                  </div>
+                  <Badge variant="outline" className="text-[10px]">{share.role === "editor" ? "Editor" : "Lectura"}</Badge>
+                  <button onClick={() => handleRemoveShare(share.userId)} className="text-muted-foreground hover:text-red-500 transition-colors" title="Quitar acceso">
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Filtros */}
       <div className="flex items-center gap-2 md:gap-3 overflow-x-auto">

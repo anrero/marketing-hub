@@ -4,11 +4,19 @@ import { getAuthUser } from "@/lib/auth";
 
 export async function GET(request: Request) {
   try {
-    const { error } = await getAuthUser(request);
+    const { user, error } = await getAuthUser(request);
     if (error) return error;
     const { searchParams } = new URL(request.url);
     const workspaceId = searchParams.get("workspaceId");
     if (!workspaceId) return NextResponse.json({ error: "workspaceId requerido" }, { status: 400 });
+
+    // Verify the user is a WorkspaceMember of this workspace
+    const membership = await prisma.workspaceMember.findUnique({
+      where: { workspaceId_userId: { workspaceId, userId: user!.id } },
+    });
+    if (!membership) {
+      return NextResponse.json({ error: "Sin acceso a este workspace" }, { status: 403 });
+    }
 
     const workspace = await prisma.workspace.findUnique({
       where: { id: workspaceId },

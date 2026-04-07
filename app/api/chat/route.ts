@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getAuthUser } from "@/lib/auth";
+import { getAuthUser, checkBoardAccess } from "@/lib/auth";
 
 export async function GET(request: Request) {
   try {
-    const { error } = await getAuthUser(request);
+    const { user, error } = await getAuthUser(request);
     if (error) return error;
     const { searchParams } = new URL(request.url);
     const channelType = searchParams.get("channelType");
@@ -13,6 +13,12 @@ export async function GET(request: Request) {
 
     if (!channelType || !channelId) {
       return NextResponse.json({ error: "channelType y channelId requeridos" }, { status: 400 });
+    }
+
+    // Permission: board chat requires board access
+    if (channelType === "board") {
+      const access = await checkBoardAccess(user!.id, channelId);
+      if (!access.hasAccess) return NextResponse.json({ error: "Sin acceso al board" }, { status: 403 });
     }
 
     let where;
@@ -43,11 +49,17 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const { error } = await getAuthUser(request);
+    const { user, error } = await getAuthUser(request);
     if (error) return error;
     const { text, channelType, channelId, senderId } = await request.json();
     if (!text || !channelType || !channelId || !senderId) {
       return NextResponse.json({ error: "Campos requeridos: text, channelType, channelId, senderId" }, { status: 400 });
+    }
+
+    // Permission: board chat requires board access
+    if (channelType === "board") {
+      const access = await checkBoardAccess(user!.id, channelId);
+      if (!access.hasAccess) return NextResponse.json({ error: "Sin acceso al board" }, { status: 403 });
     }
 
     const message = await prisma.chatMessage.create({

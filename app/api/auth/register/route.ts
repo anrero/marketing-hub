@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import type { UserModel } from "@/lib/generated/prisma/models";
 import bcrypt from "bcryptjs";
 import { createSessionToken, sessionCookieOptions } from "@/lib/session";
 
@@ -20,35 +21,96 @@ export async function POST(request: Request) {
     }
 
     const hash = await bcrypt.hash(password, 10);
+    const normalizedEmail = email.toLowerCase();
+    const isRedking = normalizedEmail.endsWith("@redking.co");
 
-    // Check if this is the first user — they become owner and get a new workspace
-    const userCount = await prisma.user.count();
-    const isFirst = userCount === 0;
+    let user: UserModel;
 
-    let workspaceId: string | null = null;
-    if (isFirst) {
-      const ws = await prisma.workspace.create({
-        data: { name: "Mi Workspace", emoji: "🚀" },
+    if (isRedking) {
+      // Find the REDKING workspace
+      const redkingWs = await prisma.workspace.findUnique({ where: { slug: "redking" } });
+      if (!redkingWs) {
+        return NextResponse.json({ error: "Workspace REDKING no encontrado" }, { status: 500 });
+      }
+
+      // Create user with REDKING workspace
+      user = await prisma.user.create({
+        data: {
+          name,
+          email: normalizedEmail,
+          password: hash,
+          role: "editor",
+          workspaceId: redkingWs.id,
+        },
       });
-      workspaceId = ws.id;
+
+      // Create WorkspaceMember for REDKING
+      await prisma.workspaceMember.create({
+        data: {
+          workspaceId: redkingWs.id,
+          userId: user.id,
+          role: "member",
+        },
+      });
+
+      // Create BoardShare for ALL boards in REDKING workspace
+      const boards = await prisma.board.findMany({
+        where: { workspaceId: redkingWs.id },
+        select: { id: true },
+      });
+
+      if (boards.length > 0) {
+        await prisma.boardShare.createMany({
+          data: boards.map((b: { id: string }) => ({
+            boardId: b.id,
+            userId: user.id,
+            role: "editor",
+            sharedBy: redkingWs.ownerId,
+          })),
+        });
+      }
     } else {
-      // Join the first workspace
-      const ws = await prisma.workspace.findFirst();
-      workspaceId = ws?.id ?? null;
-    }
+      // Non-redking: create user first (without workspace)
+      user = await prisma.user.create({
+        data: {
+          name,
+          email: normalizedEmail,
+          password: hash,
+          role: "owner",
+        },
+      });
 
-    const user = await prisma.user.create({
-      data: {
-        name,
-        email: email.toLowerCase(),
-        password: hash,
-        role: isFirst ? "owner" : "editor",
-        workspaceId,
-      },
-    });
+      // Generate slug from email: part before @, dots to dashes, append random 4 chars
+      const emailPrefix = normalizedEmail.split("@")[0].replace(/\./g, "-");
+      const randomSuffix = Math.random().toString(36).substring(2, 6);
+      const slug = `${emailPrefix}-${randomSuffix}`;
 
-    // If first user, create default boards
-    if (isFirst && workspaceId) {
+      // Create personal workspace
+      const personalWs = await prisma.workspace.create({
+        data: {
+          name: `${name}'s Workspace`,
+          slug,
+          emoji: "🚀",
+          ownerId: user.id,
+        },
+      });
+
+      // Set user's workspaceId
+      user = await prisma.user.update({
+        where: { id: user.id },
+        data: { workspaceId: personalWs.id },
+      });
+
+      // Create WorkspaceMember with role "owner"
+      await prisma.workspaceMember.create({
+        data: {
+          workspaceId: personalWs.id,
+          userId: user.id,
+          role: "owner",
+        },
+      });
+
+      // Create default board with default columns
       const defaultColumns = [
         { name: "Por hacer", color: "#6b7280", position: 0 },
         { name: "En proceso", color: "#3b82f6", position: 1 },
@@ -57,7 +119,10 @@ export async function POST(request: Request) {
       ];
       await prisma.board.create({
         data: {
-          name: "Campañas Facebook", emoji: "📣", workspaceId, position: 0,
+          name: "Mi primer board",
+          emoji: "📋",
+          workspaceId: personalWs.id,
+          position: 0,
           columns: { create: defaultColumns },
         },
       });

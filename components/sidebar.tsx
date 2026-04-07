@@ -416,6 +416,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
   } = useSidebarStore();
 
   const { theme, setTheme } = useTheme();
+  const currentUser = useAuthStore((s) => s.currentUser);
   const allViews = getAllViews();
 
   const rootPages = useMemo(() => pages.filter((p) => p.parentId === null && !p.isPrivate).sort((a, b) => a.order - b.order), [pages]);
@@ -424,6 +425,8 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
   const privatePageIds = useMemo(() => privatePages.map((p) => p.id), [privatePages]);
   const boardIds = useMemo(() => boards.map((b) => b.id), [boards]);
   const activeWs = workspaces.find((w) => w.id === activeWorkspaceId);
+  const myBoards = useMemo(() => boards.filter((b) => b.workspaceId === currentUser?.workspaceId), [boards, currentUser?.workspaceId]);
+  const sharedBoards = useMemo(() => boards.filter((b) => b.workspaceId && b.workspaceId !== currentUser?.workspaceId), [boards, currentUser?.workspaceId]);
 
   const dndSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
@@ -671,16 +674,16 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
 
             <Separator className="my-2" />
 
-            {/* Boards */}
+            {/* Mis Boards */}
             <div className="mb-2">
               {!collapsed && (
-                <SectionHeader label="Boards" collapsed={!!sectionsCollapsed["boards"]} onToggle={() => toggleSectionCollapsed("boards")} onAdd={() => setNewBoardDialogOpen(true)} />
+                <SectionHeader label="Mis Boards" collapsed={!!sectionsCollapsed["boards"]} onToggle={() => toggleSectionCollapsed("boards")} onAdd={() => setNewBoardDialogOpen(true)} />
               )}
               {(!sectionsCollapsed["boards"] || collapsed) && (
                 <DndContext sensors={dndSensors} collisionDetection={closestCenter} modifiers={[restrictToVerticalAxis]} onDragEnd={handleBoardDragEnd}>
                 <SortableContext items={boardIds} strategy={verticalListSortingStrategy}>
                 <div className="space-y-0.5">
-                  {boards.map((board) => {
+                  {myBoards.map((board) => {
                     const isActive = activeBoardId === board.id && mainView === "board";
                     const isExpanded = expandedBoardIds.includes(board.id);
 
@@ -800,6 +803,41 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
                 </DndContext>
               )}
             </div>
+
+            {/* Compartidos conmigo */}
+            {sharedBoards.length > 0 && (
+              <div className="mb-2">
+                {!collapsed && (
+                  <SectionHeader label="Compartidos" collapsed={!!sectionsCollapsed["shared"]} onToggle={() => toggleSectionCollapsed("shared")} />
+                )}
+                {(!sectionsCollapsed["shared"] || collapsed) && (
+                  <div className="space-y-0.5">
+                    {sharedBoards.map((board) => {
+                      const isActive = activeBoardId === board.id && mainView === "board";
+                      if (collapsed) {
+                        return (
+                          <Tooltip key={board.id}>
+                            <TooltipTrigger asChild>
+                              <button onClick={() => handleBoardClick(board.id)} className={cn("flex h-8 w-8 items-center justify-center rounded-lg transition-colors mx-auto", isActive ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/50")}>
+                                <UserPlus className="h-4 w-4" />
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent side="right">{board.name}</TooltipContent>
+                          </Tooltip>
+                        );
+                      }
+                      return (
+                        <button key={board.id} onClick={() => handleBoardClick(board.id)}
+                          className={cn("flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 transition-colors", isActive ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/50")}>
+                          <UserPlus className="h-4 w-4 flex-shrink-0 opacity-60" />
+                          <span className="text-sm truncate">{board.name}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
 
             <Separator className="my-2" />
 

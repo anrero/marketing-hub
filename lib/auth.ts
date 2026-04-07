@@ -33,3 +33,24 @@ export async function getAuthUser(request: Request) {
     return { user: null, error: NextResponse.json({ error: "Error de autenticación" }, { status: 500 }) };
   }
 }
+
+/**
+ * Check if a user has access to a board.
+ * Returns the access level: WorkspaceMember role or BoardShare role.
+ */
+export async function checkBoardAccess(userId: string, boardId: string): Promise<{ hasAccess: boolean; role: string }> {
+  const board = await prisma.board.findUnique({ where: { id: boardId }, select: { workspaceId: true } });
+  if (!board) return { hasAccess: false, role: "" };
+
+  const member = await prisma.workspaceMember.findUnique({
+    where: { workspaceId_userId: { workspaceId: board.workspaceId, userId } },
+  });
+  if (member) return { hasAccess: true, role: member.role };
+
+  const share = await prisma.boardShare.findUnique({
+    where: { boardId_userId: { boardId, userId } },
+  });
+  if (share) return { hasAccess: true, role: share.role };
+
+  return { hasAccess: false, role: "" };
+}
