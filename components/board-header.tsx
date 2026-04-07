@@ -27,10 +27,12 @@ export function BoardHeader() {
     activeBoardId,
     filterStore,
     filterPriority,
+    filterStatus,
     filterAssignee,
     viewMode,
     setFilterStore,
     setFilterPriority,
+    setFilterStatus,
     setFilterAssignee,
     setViewMode,
     setNewTaskDialogOpen,
@@ -48,7 +50,7 @@ export function BoardHeader() {
   const [titleDraft, setTitleDraft] = useState("");
   const titleInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => { if (editingTitle) { setTitleDraft(activeBoard?.name ?? ""); setTimeout(() => { titleInputRef.current?.focus(); titleInputRef.current?.select(); }, 0); } }, [editingTitle, activeBoard?.name]);
-  const hasFilters = filterStore || filterPriority || filterAssignee;
+  const hasFilters = filterStore || filterPriority || filterStatus || filterAssignee;
   const allStores = getAllStores();
   const allMembers = getAllTeamMembers();
   const overdueTasks = getOverdueTasks();
@@ -136,6 +138,7 @@ export function BoardHeader() {
   const clearFilters = () => {
     setFilterStore(null);
     setFilterPriority(null);
+    setFilterStatus(null);
     setFilterAssignee(null);
   };
 
@@ -385,6 +388,22 @@ export function BoardHeader() {
                 {s}
               </SelectItem>
             ))}
+          </SelectContent>
+        </Select>
+
+        <Select
+          value={filterStatus ?? "all"}
+          onValueChange={(v) => setFilterStatus(v === "all" ? null : v)}
+        >
+          <SelectTrigger className="h-8 w-[140px] text-xs">
+            <SelectValue placeholder="Estado" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Todos</SelectItem>
+            <SelectItem value="por_hacer">Por hacer</SelectItem>
+            <SelectItem value="en_proceso">En proceso</SelectItem>
+            <SelectItem value="en_revision">En revisión</SelectItem>
+            <SelectItem value="completado">Completado</SelectItem>
           </SelectContent>
         </Select>
 

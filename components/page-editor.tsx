@@ -735,11 +735,8 @@ function MediaUploader({ type, onSubmit }: { type: string; onSubmit: (url: strin
       const res = await fetch("/api/upload", { method: "POST", body: formData });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        // Fallback to blob URL if Cloudinary not configured
         if (res.status === 503) {
-          const blobUrl = URL.createObjectURL(f);
-          const size = f.size > 1024 * 1024 ? `${(f.size / (1024 * 1024)).toFixed(1)} MB` : `${(f.size / 1024).toFixed(0)} KB`;
-          onSubmit(blobUrl, f.name, size);
+          toast.error("Cloudinary no está configurado. No se pueden subir imágenes.");
           return;
         }
         console.error("Upload error:", err);
@@ -749,10 +746,7 @@ function MediaUploader({ type, onSubmit }: { type: string; onSubmit: (url: strin
       const size = f.size > 1024 * 1024 ? `${(f.size / (1024 * 1024)).toFixed(1)} MB` : `${(f.size / 1024).toFixed(0)} KB`;
       onSubmit(data.url, f.name, size);
     } catch {
-      // Fallback to blob URL on error
-      const blobUrl = URL.createObjectURL(f);
-      const size = f.size > 1024 * 1024 ? `${(f.size / (1024 * 1024)).toFixed(1)} MB` : `${(f.size / 1024).toFixed(0)} KB`;
-      onSubmit(blobUrl, f.name, size);
+      toast.error("Error al subir archivo");
     } finally {
       setUploading(false);
     }
@@ -1162,7 +1156,8 @@ export function PageEditor() {
                   try {
                     const res = await fetch("/api/upload", { method: "POST", body: formData });
                     if (res.ok) { const { url } = await res.json(); updatePage(page.id, { coverImage: url }); }
-                  } catch { /* ignore */ }
+                    else { toast.error("Error al subir imagen de portada"); }
+                  } catch { toast.error("Error al subir imagen de portada"); }
                 };
                 input.click();
               }} className="rounded bg-black/50 px-2 py-0.5 text-[10px] text-white">Cambiar</button>
@@ -1183,7 +1178,8 @@ export function PageEditor() {
               try {
                 const res = await fetch("/api/upload", { method: "POST", body: formData });
                 if (res.ok) { const { url } = await res.json(); updatePage(page.id, { coverImage: url }); }
-              } catch { /* ignore */ }
+                else { toast.error("Error al subir imagen de portada"); }
+              } catch { toast.error("Error al subir imagen de portada"); }
             };
             input.click();
           }} className="text-[10px] text-muted-foreground hover:text-foreground mb-2">+ Agregar portada</button>

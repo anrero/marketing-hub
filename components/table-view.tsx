@@ -1000,7 +1000,7 @@ export function TableView() {
   return (
     <>
     <TooltipProvider delayDuration={300}>
-      <div className="flex flex-1 flex-col overflow-auto p-6">
+      <div className="flex flex-1 flex-col overflow-x-auto overflow-y-auto p-3 md:p-6">
         {/* Saved Views Tabs */}
         <div className="flex items-center gap-1 mb-3 overflow-x-auto pb-1">
           {allViews.map((view) => (

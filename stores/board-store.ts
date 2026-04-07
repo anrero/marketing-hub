@@ -36,6 +36,7 @@ interface BoardState {
   redoStack: UndoItem[];
   filterStore: string | null;
   filterPriority: string | null;
+  filterStatus: string | null;
   filterAssignee: string | null;
   viewMode: "kanban" | "tabla" | "calendario" | "galeria" | "timeline";
   newTaskDialogOpen: boolean;
@@ -59,6 +60,7 @@ interface BoardState {
   setSelectedTask: (id: string | null) => void;
   setFilterStore: (store: string | null) => void;
   setFilterPriority: (priority: string | null) => void;
+  setFilterStatus: (status: string | null) => void;
   setFilterAssignee: (assignee: string | null) => void;
   setViewMode: (mode: "kanban" | "tabla" | "calendario" | "galeria" | "timeline") => void;
   setNewTaskDialogOpen: (open: boolean) => void;
@@ -342,6 +344,7 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
   redoStack: [],
   filterStore: null,
   filterPriority: null,
+  filterStatus: null,
   filterAssignee: null,
   viewMode: "kanban",
   newTaskDialogOpen: false,
@@ -465,6 +468,7 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
   setSelectedTask: (id) => set({ selectedTaskId: id }),
   setFilterStore: (store) => set({ filterStore: store }),
   setFilterPriority: (priority) => set({ filterPriority: priority }),
+  setFilterStatus: (status) => set({ filterStatus: status }),
   setFilterAssignee: (assignee) => set({ filterAssignee: assignee }),
   setViewMode: (mode) => set({ viewMode: mode }),
   setNewTaskDialogOpen: (open) => set({ newTaskDialogOpen: open }),
@@ -843,12 +847,29 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
         assigneeId: newTask.assigneeId || undefined,
         campaignType: newTask.campaignType || undefined,
         dueDate: newTask.dueDate || undefined,
+        description: task.description || undefined,
       }),
-    }).then((r) => r.json()).then((saved) => {
+    }).then((r) => r.json()).then(async (saved) => {
       set((s) => ({
         tasks: s.tasks.map((t) => t.id === newId ? { ...t, id: saved.id } : t),
         boards: s.boards.map((b) => ({ ...b, taskIds: b.taskIds.map((id) => id === newId ? saved.id : id) })),
       }));
+      // Copy description
+      if (task.description) {
+        apiPatchTask(saved.id, { description: task.description });
+      }
+      // Copy subtasks
+      for (const sub of task.subtasks || []) {
+        apiPatchTask(saved.id, { _addSubtask: sub.title });
+      }
+      // Copy URLs
+      for (const url of task.urls) {
+        apiPatchTask(saved.id, { _addUrl: url.url });
+      }
+      // Copy tags
+      for (const tagId of task.tags || []) {
+        apiPatchTask(saved.id, { _addTag: tagId });
+      }
     }).catch((e) => console.error("API duplicate task error:", e));
   },
 
@@ -1085,6 +1106,7 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     // Apply manual filters
     if (state.filterStore) result = result.filter((t) => t.store === state.filterStore);
     if (state.filterPriority) result = result.filter((t) => t.priority === state.filterPriority);
+    if (state.filterStatus) result = result.filter((t) => t.status === state.filterStatus);
     if (state.filterAssignee) result = result.filter((t) => t.assigneeId === state.filterAssignee);
     return result;
   },
@@ -1285,6 +1307,14 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
         tasks: st.tasks.map((t) => t.id === newId ? { ...t, id: saved.id } : t),
         boards: st.boards.map((b) => ({ ...b, taskIds: b.taskIds.map((id) => id === newId ? saved.id : id) })),
       }));
+      // Create subtasks on server
+      for (const sub of newTask.subtasks || []) {
+        apiPatchTask(saved.id, { _addSubtask: sub.title });
+      }
+      // Create tags on server
+      for (const tagId of newTask.tags || []) {
+        apiPatchTask(saved.id, { _addTag: tagId });
+      }
     }).catch((e) => console.error("API template task error:", e));
   },
 }), {

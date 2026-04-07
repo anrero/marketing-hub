@@ -23,6 +23,7 @@ model User {
   ownedWorkspace   Workspace?        @relation("WorkspaceOwner")
   workspaceMembers WorkspaceMember[]
   boardShares      BoardShare[]      @relation("BoardShareUser")
+  favorites        UserFavorite[]
 
   tasks        Task[]       @relation("assignee")
   createdTasks  Task[]       @relation("creator")
@@ -274,4 +275,15 @@ model BoardShare {
   sharedAt DateTime @default(now())
 
   @@unique([boardId, userId])
+}
+
+model UserFavorite {
+  id        String   @id @default(cuid())
+  userId    String
+  itemType  String   // "board" or "page"
+  itemId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, itemType, itemId])
 }

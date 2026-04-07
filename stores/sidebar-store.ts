@@ -200,6 +200,27 @@ export const useSidebarStore = create<SidebarState>()(persist((set, get) => ({
       const apiPages = await res.json();
       const pages = apiPages.map(transformApiPage);
       set({ pages, _pagesLoaded: true });
+
+      // Also load deleted pages for trash
+      const delRes = await fetch(`/api/pages?workspaceId=${workspaceId}&deleted=true`, { headers: getSidebarAuthHeaders(false) });
+      if (delRes.ok) {
+        const deletedPages = (await delRes.json()).map(transformApiPage);
+        const trashItems = deletedPages.map((p: PageNode) => ({
+          id: p.id, type: "page" as const, name: p.title, data: [p], deletedAt: new Date().toISOString(),
+        }));
+        set((s) => ({ ...s, trash: [...s.trash.filter(t => t.type !== "page"), ...trashItems] }));
+      }
+
+      // Also load favorites from server
+      const favRes = await fetch("/api/favorites", { headers: getSidebarAuthHeaders(false) });
+      if (favRes.ok) {
+        const favData = await favRes.json();
+        const favorites = favData.map((f: { itemType: string; itemId: string }) => ({
+          type: f.itemType as "board" | "page",
+          id: f.itemId,
+        }));
+        set({ favorites });
+      }
     } catch (e) {
       console.error("Error loading pages:", e);
     }
@@ -429,12 +450,18 @@ export const useSidebarStore = create<SidebarState>()(persist((set, get) => ({
     return { pages: result };
   }),
 
-  reorderPages: (pageIds) => set((s) => ({
-    pages: s.pages.map((p) => {
-      const idx = pageIds.indexOf(p.id);
-      return idx >= 0 ? { ...p, order: idx } : p;
-    }),
-  })),
+  reorderPages: (pageIds) => {
+    set((s) => ({
+      pages: s.pages.map((p) => {
+        const idx = pageIds.indexOf(p.id);
+        return idx >= 0 ? { ...p, order: idx } : p;
+      }),
+    }));
+    // Persist positions to server
+    pageIds.forEach((id, idx) => {
+      apiUpdatePage(id, { position: idx });
+    });
+  },
 
   movePage: (id, newParentId, isPrivate) => {
     set((s) => ({
@@ -494,10 +521,26 @@ export const useSidebarStore = create<SidebarState>()(persist((set, get) => ({
   focusMode: false,
   setFocusMode: (mode) => set({ focusMode: mode }),
 
-  toggleFavorite: (type, id) => set((s) => {
-    const exists = s.favorites.some((f) => f.type === type && f.id === id);
-    return { favorites: exists ? s.favorites.filter((f) => !(f.type === type && f.id === id)) : [...s.favorites, { type, id }] };
-  }),
+  toggleFavorite: (type, id) => {
+    const exists = get().favorites.some((f) => f.type === type && f.id === id);
+    if (exists) {
+      set((s) => ({ favorites: s.favorites.filter((f) => !(f.type === type && f.id === id)) }));
+      // Remove from server
+      fetch("/api/favorites", {
+        method: "DELETE",
+        headers: getSidebarAuthHeaders(),
+        body: JSON.stringify({ itemType: type, itemId: id }),
+      }).catch((e) => console.error("API remove favorite error:", e));
+    } else {
+      set((s) => ({ favorites: [...s.favorites, { type, id }] }));
+      // Add to server
+      fetch("/api/favorites", {
+        method: "POST",
+        headers: getSidebarAuthHeaders(),
+        body: JSON.stringify({ itemType: type, itemId: id }),
+      }).catch((e) => console.error("API add favorite error:", e));
+    }
+  },
   isFavorite: (type, id) => get().favorites.some((f) => f.type === type && f.id === id),
 
   movePageToTrash: (id) => set((s) => {

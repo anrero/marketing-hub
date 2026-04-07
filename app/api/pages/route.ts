@@ -16,9 +16,16 @@ export async function GET(request: Request) {
     });
     if (!membership) return NextResponse.json({ error: "Sin acceso a este workspace" }, { status: 403 });
 
+    // Support ?deleted=true to return soft-deleted pages for trash
+    const deleted = searchParams.get("deleted") === "true";
+
     // Pages are private — only return pages created by this user
     const pages = await prisma.page.findMany({
-      where: { workspaceId, deletedAt: null, createdById: user!.id },
+      where: {
+        workspaceId,
+        createdById: user!.id,
+        deletedAt: deleted ? { not: null } : null
+      },
       include: { blocks: { orderBy: { position: "asc" } } },
       orderBy: { position: "asc" },
     });
