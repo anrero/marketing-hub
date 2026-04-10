@@ -2,11 +2,42 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getAuthUser } from "@/lib/auth";
 
-export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const { error } = await getAuthUser(request);
+    const { user, error } = await getAuthUser(request);
     if (error) return error;
     const { id } = await params;
+
+    // Verify ownership — only the page creator can view
+    const page = await prisma.page.findUnique({
+      where: { id },
+      include: { blocks: { orderBy: { position: "asc" } } },
+    });
+    if (!page) return NextResponse.json({ error: "Página no encontrada" }, { status: 404 });
+    if (page.createdById !== user!.id) {
+      return NextResponse.json({ error: "Sin acceso a esta página" }, { status: 403 });
+    }
+
+    return NextResponse.json(page);
+  } catch (e) {
+    console.error("Page GET error:", e);
+    return NextResponse.json({ error: "Error interno" }, { status: 500 });
+  }
+}
+
+export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    const { user, error } = await getAuthUser(request);
+    if (error) return error;
+    const { id } = await params;
+
+    // Verify ownership — only the page creator can edit
+    const existing = await prisma.page.findUnique({ where: { id }, select: { createdById: true } });
+    if (!existing) return NextResponse.json({ error: "Página no encontrada" }, { status: 404 });
+    if (existing.createdById !== user!.id) {
+      return NextResponse.json({ error: "Sin acceso a esta página" }, { status: 403 });
+    }
+
     const data = await request.json();
 
     // Handle blocks update — replace all blocks
@@ -29,12 +60,12 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       await prisma.page.update({ where: { id }, data });
     }
 
-    const page = await prisma.page.findUnique({
+    const updated = await prisma.page.findUnique({
       where: { id },
       include: { blocks: { orderBy: { position: "asc" } } },
     });
 
-    return NextResponse.json(page);
+    return NextResponse.json(updated);
   } catch (e) {
     console.error("Page PATCH error:", e);
     return NextResponse.json({ error: "Error interno" }, { status: 500 });
@@ -43,9 +74,17 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
 export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const { error } = await getAuthUser(request);
+    const { user, error } = await getAuthUser(request);
     if (error) return error;
     const { id } = await params;
+
+    // Verify ownership — only the page creator can delete
+    const page = await prisma.page.findUnique({ where: { id }, select: { createdById: true } });
+    if (!page) return NextResponse.json({ error: "Página no encontrada" }, { status: 404 });
+    if (page.createdById !== user!.id) {
+      return NextResponse.json({ error: "Sin acceso a esta página" }, { status: 403 });
+    }
+
     const { searchParams } = new URL(request.url);
     const hard = searchParams.get("hard") === "true";
 

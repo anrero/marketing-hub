@@ -58,21 +58,34 @@ export function Dashboard() {
     () => (board ? tasks.filter((t) => board.taskIds.includes(t.id) && !t.archivedAt) : []),
     [board, tasks],
   );
+  const boardCols = board?.columns ?? [];
+  // A task is "done" if its column is the last column of the board OR its name hints at completion.
+  const lastColId = boardCols[boardCols.length - 1]?.id;
+  const isCompletedTask = (t: { columnId?: string | null; status?: string }) => {
+    if (t.columnId && lastColId) {
+      const col = boardCols.find((c) => c.id === t.columnId);
+      if (col) {
+        const n = col.title.toLowerCase();
+        if (n.includes("complet") || n === "done" || n === "hecho" || n === "listo") return true;
+      }
+    }
+    return t.status === "completado";
+  };
 
   const today = new Date().toISOString().split("T")[0];
 
   // --- Metrics ---
   const totalActive = useMemo(
-    () => boardTasks.filter((t) => t.status !== "completado").length,
-    [boardTasks],
+    () => boardTasks.filter((t) => !isCompletedTask(t)).length,
+    [boardTasks], // eslint-disable-line react-hooks/exhaustive-deps
   );
   const overdueTasks = useMemo(
-    () => boardTasks.filter((t) => t.dueDate < today && t.status !== "completado"),
-    [boardTasks, today],
+    () => boardTasks.filter((t) => t.dueDate < today && !isCompletedTask(t)),
+    [boardTasks, today], // eslint-disable-line react-hooks/exhaustive-deps
   );
   const todayTasks = useMemo(
-    () => boardTasks.filter((t) => t.dueDate === today && t.status !== "completado"),
-    [boardTasks, today],
+    () => boardTasks.filter((t) => t.dueDate === today && !isCompletedTask(t)),
+    [boardTasks, today], // eslint-disable-line react-hooks/exhaustive-deps
   );
   const completedThisWeek = useMemo(() => {
     const now = new Date();
@@ -82,69 +95,74 @@ export function Dashboard() {
     monday.setHours(0, 0, 0, 0);
     return boardTasks.filter(
       (t) =>
-        t.status === "completado" &&
+        isCompletedTask(t) &&
         t.activity.some(
           (a) =>
             a.field === "status" &&
-            a.newValue === "Completado" &&
             new Date(a.createdAt) >= monday,
         ),
     ).length;
-  }, [boardTasks]);
+  }, [boardTasks]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // --- Store chart data ---
+  // --- Store chart data (grouped by actual board columns) ---
   const storeChartData = useMemo(() => {
-    const map: Record<string, Record<string, number>> = {};
+    const map: Record<string, { vencidas: number; byCol: Record<string, number> }> = {};
     for (const t of boardTasks) {
       const storeName = t.store || "Sin tienda";
-      if (!map[storeName]) map[storeName] = { vencidas: 0, en_proceso: 0, en_revision: 0, completado: 0, por_hacer: 0 };
-      if (t.dueDate < today && t.status !== "completado") {
+      if (!map[storeName]) map[storeName] = { vencidas: 0, byCol: {} };
+      if (t.dueDate < today && !isCompletedTask(t)) {
         map[storeName].vencidas++;
-      } else {
-        map[storeName][t.status]++;
+        continue;
       }
+      const key = t.columnId ?? "__none__";
+      map[storeName].byCol[key] = (map[storeName].byCol[key] ?? 0) + 1;
     }
     return Object.entries(map)
-      .map(([store, counts]) => ({
-        store,
-        vencidas: counts.vencidas,
-        en_proceso: counts.en_proceso,
-        en_revision: counts.en_revision,
-        completado: counts.completado,
-        por_hacer: counts.por_hacer,
-        pending: counts.vencidas + counts.por_hacer + counts.en_proceso + counts.en_revision,
-        total: Object.values(counts).reduce((a, b) => a + b, 0),
-      }))
+      .map(([store, { vencidas, byCol }]) => {
+        const total = vencidas + Object.values(byCol).reduce((a, b) => a + b, 0);
+        const pending = vencidas + boardCols.reduce((sum, c) => {
+          const n = c.title.toLowerCase();
+          const done = n.includes("complet") || n === "done" || n === "hecho" || n === "listo";
+          return sum + (done ? 0 : (byCol[c.id] ?? 0));
+        }, 0);
+        return { store, vencidas, byCol, total, pending };
+      })
       .sort((a, b) => b.pending - a.pending);
-  }, [boardTasks, today]);
+  }, [boardTasks, today, boardCols]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const maxStoreTotal = useMemo(
     () => Math.max(1, ...storeChartData.map((d) => d.total)),
     [storeChartData],
   );
 
-  // --- Workload per person ---
+  // Palette for dynamic column colors — fall back to this if column.color is missing
+  const fallbackPalette = ["#64748b", "#3b82f6", "#f59e0b", "#22c55e", "#a855f7", "#ec4899", "#06b6d4"];
+
+  // --- Workload per person (grouped by board columns) ---
   const personData = useMemo(() => {
-    const map: Record<string, { porHacer: number; enProceso: number; enRevision: number; total: number; completado: number }> = {};
+    const map: Record<string, { byCol: Record<string, number>; total: number; completed: number }> = {};
     for (const t of boardTasks) {
-      if (!map[t.assigneeId])
-        map[t.assigneeId] = { porHacer: 0, enProceso: 0, enRevision: 0, total: 0, completado: 0 };
+      if (!map[t.assigneeId]) map[t.assigneeId] = { byCol: {}, total: 0, completed: 0 };
       map[t.assigneeId].total++;
-      if (t.status === "por_hacer") map[t.assigneeId].porHacer++;
-      else if (t.status === "en_proceso") map[t.assigneeId].enProceso++;
-      else if (t.status === "en_revision") map[t.assigneeId].enRevision++;
-      else if (t.status === "completado") map[t.assigneeId].completado++;
+      const key = t.columnId ?? "__none__";
+      map[t.assigneeId].byCol[key] = (map[t.assigneeId].byCol[key] ?? 0) + 1;
+      if (isCompletedTask(t)) map[t.assigneeId].completed++;
     }
     return Object.entries(map)
-      .map(([id, c]) => ({
-        id,
-        name: memberMap[id]?.name ?? id,
-        ...c,
-        pending: c.porHacer + c.enProceso + c.enRevision,
-        progress: c.total > 0 ? Math.round((c.completado / c.total) * 100) : 0,
-      }))
+      .map(([id, c]) => {
+        const pending = c.total - c.completed;
+        return {
+          id,
+          name: memberMap[id]?.name ?? id,
+          byCol: c.byCol,
+          total: c.total,
+          completed: c.completed,
+          pending,
+          progress: c.total > 0 ? Math.round((c.completed / c.total) * 100) : 0,
+        };
+      })
       .sort((a, b) => b.pending - a.pending);
-  }, [boardTasks, memberMap]);
+  }, [boardTasks, memberMap]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- Recent activity ---
   const recentActivity = useMemo(
@@ -230,13 +248,15 @@ export function Dashboard() {
             <p className="text-xs text-muted-foreground py-4 text-center">Sin datos</p>
           ) : (
             <div className="space-y-3">
-              {/* Legend */}
+              {/* Legend (dynamic by board columns) */}
               <div className="flex flex-wrap gap-3 text-[10px] text-muted-foreground mb-2">
-                <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-red-500" />Vencidas</span>
-                <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-blue-500" />En proceso</span>
-                <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-amber-500" />En revisión</span>
-                <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-emerald-500" />Completadas</span>
-                <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-slate-400" />Por hacer</span>
+                <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: "#ef4444" }} />Vencidas</span>
+                {boardCols.map((c, i) => (
+                  <span key={c.id} className="flex items-center gap-1">
+                    <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: c.color ?? fallbackPalette[i % fallbackPalette.length] }} />
+                    {c.title}
+                  </span>
+                ))}
               </div>
               {storeChartData.map((d) => (
                 <div key={d.store} className="flex items-center gap-3">
@@ -244,39 +264,23 @@ export function Dashboard() {
                   <div className="flex-1 flex h-5 rounded overflow-hidden bg-muted/30">
                     {d.vencidas > 0 && (
                       <div
-                        className="bg-red-500 h-full"
-                        style={{ width: `${(d.vencidas / maxStoreTotal) * 100}%` }}
+                        className="h-full"
+                        style={{ width: `${(d.vencidas / maxStoreTotal) * 100}%`, backgroundColor: "#ef4444" }}
                         title={`Vencidas: ${d.vencidas}`}
                       />
                     )}
-                    {d.en_proceso > 0 && (
-                      <div
-                        className="bg-blue-500 h-full"
-                        style={{ width: `${(d.en_proceso / maxStoreTotal) * 100}%` }}
-                        title={`En proceso: ${d.en_proceso}`}
-                      />
-                    )}
-                    {d.en_revision > 0 && (
-                      <div
-                        className="bg-amber-500 h-full"
-                        style={{ width: `${(d.en_revision / maxStoreTotal) * 100}%` }}
-                        title={`En revisión: ${d.en_revision}`}
-                      />
-                    )}
-                    {d.completado > 0 && (
-                      <div
-                        className="bg-emerald-500 h-full"
-                        style={{ width: `${(d.completado / maxStoreTotal) * 100}%` }}
-                        title={`Completadas: ${d.completado}`}
-                      />
-                    )}
-                    {d.por_hacer > 0 && (
-                      <div
-                        className="bg-slate-400 h-full"
-                        style={{ width: `${(d.por_hacer / maxStoreTotal) * 100}%` }}
-                        title={`Por hacer: ${d.por_hacer}`}
-                      />
-                    )}
+                    {boardCols.map((c, i) => {
+                      const count = d.byCol[c.id] ?? 0;
+                      if (count === 0) return null;
+                      return (
+                        <div
+                          key={c.id}
+                          className="h-full"
+                          style={{ width: `${(count / maxStoreTotal) * 100}%`, backgroundColor: c.color ?? fallbackPalette[i % fallbackPalette.length] }}
+                          title={`${c.title}: ${count}`}
+                        />
+                      );
+                    })}
                   </div>
                   <span className="text-[10px] text-muted-foreground w-6 text-right">{d.total}</span>
                 </div>
@@ -299,9 +303,9 @@ export function Dashboard() {
                 <thead>
                   <tr className="border-b border-border text-muted-foreground">
                     <th className="text-left py-2 pr-3 font-medium">Nombre</th>
-                    <th className="text-center py-2 px-2 font-medium">Por hacer</th>
-                    <th className="text-center py-2 px-2 font-medium">En proceso</th>
-                    <th className="text-center py-2 px-2 font-medium">En revisión</th>
+                    {boardCols.map((c) => (
+                      <th key={c.id} className="text-center py-2 px-2 font-medium">{c.title}</th>
+                    ))}
                     <th className="text-center py-2 px-2 font-medium">Total</th>
                     <th className="text-left py-2 pl-3 font-medium w-32">Progreso</th>
                   </tr>
@@ -316,9 +320,9 @@ export function Dashboard() {
                       )}
                     >
                       <td className="py-2 pr-3 font-medium">{p.name}</td>
-                      <td className="text-center py-2 px-2">{p.porHacer}</td>
-                      <td className="text-center py-2 px-2">{p.enProceso}</td>
-                      <td className="text-center py-2 px-2">{p.enRevision}</td>
+                      {boardCols.map((c) => (
+                        <td key={c.id} className="text-center py-2 px-2">{p.byCol[c.id] ?? 0}</td>
+                      ))}
                       <td className="text-center py-2 px-2 font-semibold">{p.total}</td>
                       <td className="py-2 pl-3">
                         <div className="flex items-center gap-2">

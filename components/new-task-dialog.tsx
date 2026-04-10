@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
@@ -19,28 +19,40 @@ import {
 } from "@/components/ui/select";
 import { useBoardStore } from "@/stores/board-store";
 import { useAuthStore } from "@/stores/auth-store";
-import { COLUMNS, PRIORITIES } from "@/lib/mock-data";
-import type { Task, Status, Store, Priority } from "@/types";
+import { PRIORITIES } from "@/lib/mock-data";
+import type { Task, Store, Priority } from "@/types";
 import { toast } from "sonner";
 
 export function NewTaskDialog() {
-  const { newTaskDialogOpen, setNewTaskDialogOpen, addTask, getAllStores, getAllTeamMembers, taskTemplates, addTaskFromTemplate } = useBoardStore();
+  const { newTaskDialogOpen, setNewTaskDialogOpen, addTask, getAllStores, getAllTeamMembers, taskTemplates, addTaskFromTemplate, boards, activeBoardId } = useBoardStore();
   const currentUser = useAuthStore((s) => s.currentUser);
   const allStores = getAllStores();
   const allMembers = getAllTeamMembers();
   const defaultAssignee = currentUser?.id || allMembers[0]?.id || "";
+  const activeBoard = boards.find((b) => b.id === activeBoardId);
+  const boardColumns = activeBoard?.columns ?? [];
+
   const [title, setTitle] = useState("");
-  const [status, setStatus] = useState<Status>("por_hacer");
+  const [columnId, setColumnId] = useState<string>("");
   const [priority, setPriority] = useState<Priority>("media");
   const [store, setStore] = useState<Store>("MedSock");
   const [assigneeId, setAssigneeId] = useState(defaultAssignee);
 
+  // Re-sync default column when the dialog opens or the active board changes
+  useEffect(() => {
+    if (newTaskDialogOpen) {
+      setColumnId(boardColumns[0]?.id ?? "");
+    }
+  }, [newTaskDialogOpen, activeBoardId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleCreate = () => {
     if (!title.trim()) return;
+    const resolvedColumnId = columnId || boardColumns[0]?.id || null;
     const newTask: Task = {
       id: `t${Date.now()}`,
       title: title.trim(),
-      status,
+      status: "por_hacer", // Will be overwritten by addTask based on the resolved column
+      columnId: resolvedColumnId,
       priority,
       store,
       assigneeId,
@@ -62,7 +74,7 @@ export function NewTaskDialog() {
     };
     addTask(newTask);
     setTitle("");
-    setStatus("por_hacer");
+    setColumnId(boardColumns[0]?.id ?? "");
     setPriority("media");
     setStore("MedSock");
     setAssigneeId(defaultAssignee);
@@ -111,16 +123,19 @@ export function NewTaskDialog() {
                 Columna
               </label>
               <Select
-                value={status}
-                onValueChange={(v) => setStatus(v as Status)}
+                value={columnId}
+                onValueChange={(v) => setColumnId(v)}
               >
                 <SelectTrigger className="text-xs">
-                  <SelectValue />
+                  <SelectValue placeholder="Selecciona columna" />
                 </SelectTrigger>
                 <SelectContent>
-                  {COLUMNS.map((c) => (
+                  {boardColumns.map((c) => (
                     <SelectItem key={c.id} value={c.id}>
-                      {c.title}
+                      <span className="flex items-center gap-2">
+                        <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: c.color ?? "#6b7280" }} />
+                        {c.title}
+                      </span>
                     </SelectItem>
                   ))}
                 </SelectContent>

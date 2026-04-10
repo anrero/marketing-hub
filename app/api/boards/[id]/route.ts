@@ -2,6 +2,33 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getAuthUser, checkBoardAccess } from "@/lib/auth";
 
+export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    const { user, error } = await getAuthUser(request);
+    if (error) return error;
+    const { id } = await params;
+
+    const access = await checkBoardAccess(user!.id, id);
+    if (!access.hasAccess) {
+      return NextResponse.json({ error: "Sin acceso al tablero" }, { status: 403 });
+    }
+
+    const board = await prisma.board.findUnique({
+      where: { id },
+      include: {
+        columns: { orderBy: { position: "asc" } },
+        _count: { select: { shares: true } },
+      },
+    });
+    if (!board) return NextResponse.json({ error: "Tablero no encontrado" }, { status: 404 });
+
+    return NextResponse.json(board);
+  } catch (e) {
+    console.error("Board GET error:", e);
+    return NextResponse.json({ error: "Error interno" }, { status: 500 });
+  }
+}
+
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { user, error } = await getAuthUser(request);

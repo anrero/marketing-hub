@@ -28,8 +28,8 @@ import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } 
 import { CSS } from "@dnd-kit/utilities";
 import { useBoardStore } from "@/stores/board-store";
 import { useSidebarStore } from "@/stores/sidebar-store";
-import { COLUMNS, PRIORITIES } from "@/lib/mock-data";
-import type { Status, Store, Priority, CampaignType, ReminderOption } from "@/types";
+import { PRIORITIES } from "@/lib/mock-data";
+import type { Store, Priority, CampaignType, ReminderOption } from "@/types";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -63,13 +63,6 @@ const REMINDER_OPTIONS: { value: ReminderOption; label: string }[] = [
   { value: "1_week", label: "1 semana antes" },
 ];
 
-const statusBadge: Record<string, string> = {
-  por_hacer: "bg-slate-500/15 text-slate-600 dark:text-slate-400",
-  en_proceso: "bg-blue-500/15 text-blue-600 dark:text-blue-400",
-  en_revision: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
-  completado: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
-};
-const statusDot: Record<string, string> = { por_hacer: "bg-slate-500", en_proceso: "bg-blue-500", en_revision: "bg-amber-500", completado: "bg-emerald-500" };
 const priorityBadge: Record<string, string> = {
   urgente: "bg-red-500/15 text-red-600 dark:text-red-400",
   alta: "bg-orange-500/15 text-orange-600 dark:text-orange-400",
@@ -77,9 +70,9 @@ const priorityBadge: Record<string, string> = {
   baja: "bg-gray-400/15 text-gray-500 dark:text-gray-400",
 };
 
-function exportTaskMarkdown(task: ReturnType<typeof useBoardStore.getState>["tasks"][0], allMembers: { id: string; name: string }[]) {
+function exportTaskMarkdown(task: ReturnType<typeof useBoardStore.getState>["tasks"][0], allMembers: { id: string; name: string }[], columnTitle: string) {
   const assignee = allMembers.find((m) => m.id === task.assigneeId)?.name ?? "Sin asignar";
-  const statusLabel = COLUMNS.find((c) => c.id === task.status)?.title ?? task.status;
+  const statusLabel = columnTitle || task.status;
   const subs = (task.subtasks ?? []).map((s) => `- [${s.completed ? "x" : " "}] ${s.title}`).join("\n");
   const urls = task.urls.map((u) => `- ${u.url}`).join("\n");
   const desc = task.description?.replace(/<[^>]*>/g, "") ?? "";
@@ -110,7 +103,7 @@ export function TaskDetail() {
     removeAttachment, getAllStores, getAllCampaignTypes, getAllTeamMembers,
     addSubtask, toggleSubtask, removeSubtask, reorderSubtasks, setReminder,
     getAllTags, archiveTask, unarchiveTask, duplicateTask, deleteTask,
-    moveTaskToBoard, boards,
+    moveTaskToBoard, boards, activeBoardId, moveTask,
     addTaskUrl, removeTaskUrl,
     addComment: storeAddComment, addTaskTag, removeTaskTag, addDependency, removeDependency,
     addTag,
@@ -143,6 +136,13 @@ export function TaskDetail() {
   const onDrop = useCallback(
     async (acceptedFiles: File[]) => {
       if (!task) return;
+      // Optimistic tasks use a client-side temp id ("t" + digits). The server
+      // has no row yet, so the Attachment FK would fail. Refuse up front with
+      // a clear message instead of a confusing 500.
+      if (/^t\d/.test(task.id)) {
+        toast.error("Espera un momento y vuelve a intentarlo — la tarea aún se está sincronizando.");
+        return;
+      }
       setUploading(true);
       let uploaded = 0;
       for (const file of acceptedFiles) {
@@ -151,16 +151,19 @@ export function TaskDetail() {
           formData.append("file", file);
           formData.append("taskId", task.id);
           formData.append("field", "attachment");
-          const res = await fetch("/api/upload", { method: "POST", body: formData });
+          const res = await fetch("/api/upload", { method: "POST", body: formData, credentials: "same-origin" });
           if (!res.ok) {
             const err = await res.json().catch(() => ({ error: "Error al subir" }));
             toast.error(err.error || "Error al subir archivo");
             continue;
           }
           const saved = await res.json();
-          // Add to local store immediately
+          // Append to the current task in the store. Read the live task by id
+          // (not the closure `task`) so concurrent uploads don't overwrite
+          // each other with a stale attachments array.
+          const liveTask = useBoardStore.getState().tasks.find((t) => t.id === task.id);
           updateTask(task.id, {
-            attachments: [...(useBoardStore.getState().tasks.find((t) => t.id === task.id)?.attachments || []), {
+            attachments: [...(liveTask?.attachments || []), {
               id: saved.id,
               name: saved.name,
               size: saved.size >= 1048576 ? `${(saved.size / 1048576).toFixed(1)} MB` : `${(saved.size / 1024).toFixed(0)} KB`,
@@ -194,8 +197,32 @@ export function TaskDetail() {
     }
   }, [selectedTaskId, task?.title]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Description: load from store when task changes ──
+  // ── Reset draft inputs when switching tasks ──
+  // Without this, a URL/subtask/tag draft typed into task X's inputs would
+  // still be visible after opening task Y, and pressing Enter would add it
+  // to Y — which looks like a URL "leaked" from X to Y.
   useEffect(() => {
+    setNewComment("");
+    setNewUrl("");
+    setNewSubtaskTitle("");
+    setNewTagName("");
+    setNewTagColor("#3b82f6");
+    setAddingSubtask(false);
+    setActivityOpen(false);
+  }, [selectedTaskId]);
+
+  // ── Description: flush pending save for the previous task, then load the new one ──
+  // If the user has an un-debounced description in X and clicks on Y, we must
+  // save X's text BEFORE we overwrite descValue/descTaskIdRef with Y's data —
+  // otherwise X's edit would be lost.
+  useEffect(() => {
+    if (descTimerRef.current) {
+      clearTimeout(descTimerRef.current);
+      descTimerRef.current = null;
+    }
+    if (descDirtyRef.current && descTaskIdRef.current && descTaskIdRef.current !== task?.id) {
+      persistDescription(descTaskIdRef.current, descValueRef.current);
+    }
     if (task) {
       const val = task.description ?? "";
       setDescValue(val);
@@ -339,7 +366,7 @@ export function TaskDetail() {
                   <Archive className="mr-2 h-3.5 w-3.5" />Archivar
                 </DropdownMenuItem>
               )}
-              <DropdownMenuItem onClick={() => { exportTaskMarkdown(task, allMembers); toast.success("Markdown descargado"); }}>
+              <DropdownMenuItem onClick={() => { exportTaskMarkdown(task, allMembers, boards.find((b) => b.id === activeBoardId)?.columns.find((c) => c.id === task.columnId)?.title ?? ""); toast.success("Markdown descargado"); }}>
                 <Download className="mr-2 h-3.5 w-3.5" />Exportar como Markdown
               </DropdownMenuItem>
               <DropdownMenuSeparator />
@@ -373,7 +400,7 @@ export function TaskDetail() {
           </Button>
         </div>
 
-        <ScrollArea className="flex-1">
+        <ScrollArea key={selectedTaskId} className="flex-1">
           <div className="px-6 py-5">
             {/* Cover */}
             {task.coverImage && (
@@ -407,7 +434,7 @@ export function TaskDetail() {
                   formData.append("file", file);
                   formData.append("field", "cover");
                   try {
-                    const res = await fetch("/api/upload", { method: "POST", body: formData });
+                    const res = await fetch("/api/upload", { method: "POST", body: formData, credentials: "same-origin" });
                     if (!res.ok) { const err = await res.json().catch(() => ({})); toast.error(err.error || "Error al subir"); return; }
                     const { url } = await res.json();
                     updateTaskWithActivity(task.id, { coverImage: url });
@@ -438,17 +465,37 @@ export function TaskDetail() {
                   <SelectContent>{allMembers.map((m) => <SelectItem key={m.id} value={m.id}><span className="flex items-center gap-2">{m.name}<span className="text-[10px] text-muted-foreground">— {m.role}</span></span></SelectItem>)}</SelectContent>
                 </Select>
               </PropRow>
-              {/* Estado */}
-              <PropRow label="Estado">
-                <Select value={task.status} onValueChange={(v) => handleFieldChange({ status: v as Status })}>
-                  <SelectTrigger className="h-8 w-full text-xs border-none shadow-none bg-transparent px-2 hover:bg-muted/50">
-                    <Badge variant="outline" className={cn("text-[10px] border-none gap-1.5", statusBadge[task.status])}>
-                      <span className={cn("h-1.5 w-1.5 rounded-full", statusDot[task.status])} />
-                      <SelectValue />
-                    </Badge>
-                  </SelectTrigger>
-                  <SelectContent>{COLUMNS.map((c) => <SelectItem key={c.id} value={c.id}>{c.title}</SelectItem>)}</SelectContent>
-                </Select>
+              {/* Columna */}
+              <PropRow label="Columna">
+                {(() => {
+                  const board = boards.find((b) => b.id === activeBoardId);
+                  const cols = board?.columns ?? [];
+                  const currentCol = cols.find((c) => c.id === task.columnId);
+                  const accent = currentCol?.color ?? "#6b7280";
+                  return (
+                    <Select
+                      value={task.columnId ?? ""}
+                      onValueChange={(v) => { if (v) moveTask(task.id, v); }}
+                    >
+                      <SelectTrigger className="h-8 w-full text-xs border-none shadow-none bg-transparent px-2 hover:bg-muted/50">
+                        <Badge variant="outline" className="text-[10px] border-none gap-1.5 bg-muted/30">
+                          <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: accent }} />
+                          {currentCol?.title ?? "Sin columna"}
+                        </Badge>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {cols.map((c) => (
+                          <SelectItem key={c.id} value={c.id}>
+                            <span className="flex items-center gap-2">
+                              <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: c.color ?? "#6b7280" }} />
+                              {c.title}
+                            </span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  );
+                })()}
               </PropRow>
               {/* Prioridad */}
               <PropRow label="Prioridad">
@@ -583,7 +630,7 @@ export function TaskDetail() {
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="center" className="w-[160px]">
                   <DropdownMenuItem onClick={() => { duplicateTask(task.id); toast.success("Tarea duplicada"); }}>Duplicar tarea</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => { exportTaskMarkdown(task, allMembers); toast.success("Descargado"); }}>Exportar Markdown</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => { exportTaskMarkdown(task, allMembers, boards.find((b) => b.id === activeBoardId)?.columns.find((c) => c.id === task.columnId)?.title ?? ""); toast.success("Descargado"); }}>Exportar Markdown</DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
               <div className="flex-1 h-px bg-border" />

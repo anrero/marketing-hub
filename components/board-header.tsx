@@ -136,10 +136,14 @@ export function BoardHeader() {
     if (!b) return [];
     return b.taskIds.map((id) => tasks.find((t) => t.id === id)).filter((t): t is Task => !!t && !t.archivedAt);
   }, [boards, activeBoardId, tasks]);
-  const statsPorHacer = boardTasks.filter((t) => t.status === "por_hacer").length;
-  const statsEnProceso = boardTasks.filter((t) => t.status === "en_proceso").length;
-  const statsEnRevision = boardTasks.filter((t) => t.status === "en_revision").length;
-  const statsCompletadas = boardTasks.filter((t) => t.status === "completado").length;
+  const columnStats = useMemo(() => {
+    const cols = activeBoard?.columns ?? [];
+    return cols.map((c) => ({
+      id: c.id,
+      title: c.title,
+      count: boardTasks.filter((t) => (t.columnId ?? "") === c.id).length,
+    }));
+  }, [activeBoard, boardTasks]);
 
   const clearFilters = () => {
     setFilterStore(null);
@@ -189,7 +193,10 @@ export function BoardHeader() {
         )}
         {boardTasks.length > 0 && (
           <p className="text-[11px] text-muted-foreground hidden md:block">
-            {boardTasks.length} tareas · {statsPorHacer} por hacer · {statsEnProceso} en proceso · {statsEnRevision} en revisión · {statsCompletadas} completadas
+            {boardTasks.length} tareas
+            {columnStats.map((c) => (
+              <span key={c.id}> · {c.count} {c.title.toLowerCase()}</span>
+            ))}
           </p>
         )}
 
@@ -403,15 +410,14 @@ export function BoardHeader() {
           value={filterStatus ?? "all"}
           onValueChange={(v) => setFilterStatus(v === "all" ? null : v)}
         >
-          <SelectTrigger className="h-8 w-[140px] text-xs">
-            <SelectValue placeholder="Estado" />
+          <SelectTrigger className="h-8 w-[160px] text-xs">
+            <SelectValue placeholder="Columna" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">Todos</SelectItem>
-            <SelectItem value="por_hacer">Por hacer</SelectItem>
-            <SelectItem value="en_proceso">En proceso</SelectItem>
-            <SelectItem value="en_revision">En revisión</SelectItem>
-            <SelectItem value="completado">Completado</SelectItem>
+            <SelectItem value="all">Todas las columnas</SelectItem>
+            {(activeBoard?.columns ?? []).map((c) => (
+              <SelectItem key={c.id} value={c.id}>{c.title}</SelectItem>
+            ))}
           </SelectContent>
         </Select>
 

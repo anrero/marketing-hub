@@ -96,6 +96,15 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       delete data._removeUrl;
     }
 
+    // If the caller is moving the task to a different column, also refresh the
+    // task.status string so legacy hardcoded checks (e.g. "completado") keep working.
+    if (typeof data.columnId === "string" && data.columnId) {
+      const targetCol = await prisma.column.findUnique({ where: { id: data.columnId }, select: { name: true, boardId: true } });
+      if (targetCol && targetCol.boardId === existingTask.boardId) {
+        data.status = statusFromColumnName(targetCol.name);
+      }
+    }
+
     // Clean internal fields before updating task
     const cleanData = { ...data };
     delete cleanData._addSubtask;
@@ -138,6 +147,15 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     console.error("Task PATCH error:", e);
     return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
+}
+
+function statusFromColumnName(name: string): string {
+  const n = name.toLowerCase().trim();
+  if (n.includes("hacer")) return "por_hacer";
+  if (n.includes("proceso") || n.includes("progreso")) return "en_proceso";
+  if (n.includes("revisi")) return "en_revision";
+  if (n.includes("complet") || n === "done" || n === "hecho" || n === "listo") return "completado";
+  return n.replace(/\s+/g, "_");
 }
 
 export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {

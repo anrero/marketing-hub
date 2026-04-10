@@ -29,6 +29,7 @@ import { useTableColumnsStore } from "@/stores/table-columns-store";
 import type { Task, Status, Priority, TableColumnDef, CustomColumnType } from "@/types";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import DOMPurify from "dompurify";
 
 // ── Color maps ──────────────────────────────────────────────
 const priorityColors: Record<string, string> = {
@@ -38,25 +39,22 @@ const priorityColors: Record<string, string> = {
   baja: "bg-green-500/20 text-green-600 border-green-500/30 dark:text-green-400",
 };
 const priorityDotColors: Record<string, string> = { urgente: "bg-red-500", alta: "bg-orange-500", media: "bg-yellow-500", baja: "bg-green-500" };
+// Legacy status labels (fallback for when a board column title isn't known).
 const statusLabels: Record<string, string> = { por_hacer: "Por hacer", en_proceso: "En proceso", en_revision: "En revisión", completado: "Completado" };
-const statusColors: Record<string, string> = {
-  por_hacer: "bg-slate-500/20 text-slate-600 border-slate-500/30 dark:text-slate-400",
-  en_proceso: "bg-blue-500/20 text-blue-600 border-blue-500/30 dark:text-blue-400",
-  en_revision: "bg-amber-500/20 text-amber-600 border-amber-500/30 dark:text-amber-400",
-  completado: "bg-emerald-500/20 text-emerald-600 border-emerald-500/30 dark:text-emerald-400",
-};
-const statusDotColors: Record<string, string> = { por_hacer: "bg-slate-500", en_proceso: "bg-blue-500", en_revision: "bg-amber-500", completado: "bg-emerald-500" };
 const priorityOrder: Record<string, number> = { urgente: 0, alta: 1, media: 2, baja: 3 };
-const statusOrder: Record<string, number> = { por_hacer: 0, en_proceso: 1, en_revision: 2, completado: 3 };
 
 // ── Sort ────────────────────────────────────────────────────
 type SortDir = "asc" | "desc";
 
-function sortTasks(tasks: Task[], key: string, dir: SortDir, allMembers: { id: string; name: string }[]): Task[] {
+function sortTasks(tasks: Task[], key: string, dir: SortDir, allMembers: { id: string; name: string }[], columnOrder: Record<string, number>): Task[] {
   return [...tasks].sort((a, b) => {
     let cmp = 0;
     if (key === "priority") cmp = (priorityOrder[a.priority] ?? 99) - (priorityOrder[b.priority] ?? 99);
-    else if (key === "status") cmp = (statusOrder[a.status] ?? 99) - (statusOrder[b.status] ?? 99);
+    else if (key === "status") {
+      const ai = columnOrder[a.columnId ?? ""] ?? 99;
+      const bi = columnOrder[b.columnId ?? ""] ?? 99;
+      cmp = ai - bi;
+    }
     else if (key === "assigneeId") {
       cmp = (allMembers.find((m) => m.id === a.assigneeId)?.name ?? "").localeCompare(allMembers.find((m) => m.id === b.assigneeId)?.name ?? "");
     } else if (key === "dueDate") cmp = a.dueDate.localeCompare(b.dueDate);
@@ -71,10 +69,13 @@ function sortTasks(tasks: Task[], key: string, dir: SortDir, allMembers: { id: s
 }
 
 // ── Helpers ─────────────────────────────────────────────────
-function getCellValue(task: Task, col: TableColumnDef, allMembers: { id: string; name: string }[]): string {
+function getCellValue(task: Task, col: TableColumnDef, allMembers: { id: string; name: string }[], boardColumns: { id: string; title: string }[] = []): string {
   if (!col.builtIn) return task.customFields?.[col.id] ?? "";
   const raw = (task as unknown as Record<string, string>)[col.key];
-  if (col.key === "status") return statusLabels[raw as string] ?? String(raw ?? "");
+  if (col.key === "status") {
+    const colMatch = boardColumns.find((c) => c.id === task.columnId);
+    return colMatch?.title ?? statusLabels[raw as string] ?? String(raw ?? "");
+  }
   if (col.key === "priority") return String(raw ?? "");
   if (col.key === "assigneeId") return allMembers.find((m) => m.id === raw)?.name ?? String(raw ?? "");
   if (col.key === "dueDate") {
@@ -345,11 +346,12 @@ function ViewIcon({ icon }: { icon: string }) {
 
 // ── Bulk Actions Bar ────────────────────────────────────────
 function BulkActionsBar({ selectedIds, onClear }: { selectedIds: Set<string>; onClear: () => void }) {
-  const { bulkMove, bulkAssign, bulkPriority, bulkDelete, bulkDuplicate, getAllTeamMembers } = useBoardStore();
+  const { moveTask, bulkAssign, bulkPriority, bulkDelete, bulkDuplicate, getAllTeamMembers, boards, activeBoardId } = useBoardStore();
   const allMembers = getAllTeamMembers();
   const ids = Array.from(selectedIds);
-  const statuses: Status[] = ["por_hacer", "en_proceso", "en_revision", "completado"];
   const priorities: Priority[] = ["urgente", "alta", "media", "baja"];
+  const activeBoard = boards.find((b) => b.id === activeBoardId);
+  const boardColumns = activeBoard?.columns ?? [];
 
   return (
     <div className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-4 py-2 mb-3">
@@ -357,7 +359,7 @@ function BulkActionsBar({ selectedIds, onClear }: { selectedIds: Set<string>; on
       <div className="mx-2 h-4 w-px bg-border" />
       <DropdownMenu>
         <DropdownMenuTrigger asChild><Button variant="outline" size="sm" className="h-7 text-xs gap-1"><ArrowRightToLine className="h-3 w-3" /> Mover a...</Button></DropdownMenuTrigger>
-        <DropdownMenuContent>{statuses.map((s) => <DropdownMenuItem key={s} onClick={() => { bulkMove(ids, s); onClear(); }}>{statusLabels[s]}</DropdownMenuItem>)}</DropdownMenuContent>
+        <DropdownMenuContent>{boardColumns.map((c) => <DropdownMenuItem key={c.id} onClick={() => { ids.forEach((id) => moveTask(id, c.id)); onClear(); }}>{c.title}</DropdownMenuItem>)}</DropdownMenuContent>
       </DropdownMenu>
       <DropdownMenu>
         <DropdownMenuTrigger asChild><Button variant="outline" size="sm" className="h-7 text-xs gap-1"><Users className="h-3 w-3" /> Asignar a...</Button></DropdownMenuTrigger>
@@ -414,7 +416,7 @@ function RichTitleEditor({ html, onSave, onCancel }: { html: string; onSave: (h:
 
   useEffect(() => {
     const el = editorRef.current;
-    if (el) { el.innerHTML = html; el.focus(); const r = document.createRange(); r.selectNodeContents(el); r.collapse(false); const s = window.getSelection(); s?.removeAllRanges(); s?.addRange(r); }
+    if (el) { el.innerHTML = DOMPurify.sanitize(html); el.focus(); const r = document.createRange(); r.selectNodeContents(el); r.collapse(false); const s = window.getSelection(); s?.removeAllRanges(); s?.addRange(r); }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const updateActive = useCallback(() => {
@@ -494,11 +496,33 @@ function AddNewInput({ label, onAdd }: { label: string; onAdd: (v: string) => vo
   return (<div className="px-2 py-1" onClick={(e) => e.stopPropagation()}><Input ref={inputRef} value={val} onChange={(e) => setVal(e.target.value)} placeholder="Nombre..." className="h-7 text-xs" onKeyDown={(e) => { if (e.key === "Enter" && val.trim()) { onAdd(val.trim()); setVal(""); setAdding(false); } if (e.key === "Escape") { setVal(""); setAdding(false); } }} /></div>);
 }
 
-// ── Status cell ─────────────────────────────────────────────
-function StatusCell({ task, onUpdate, cellId, flashId }: { task: Task; onUpdate: (s: Status) => void; cellId: string; flashId: string | null }) {
+// ── Status / Column cell ─────────────────────────────────────
+function StatusCell({ task, columns, onMove, cellId, flashId }: { task: Task; columns: { id: string; title: string; color?: string }[]; onMove: (columnId: string) => void; cellId: string; flashId: string | null }) {
   const [open, setOpen] = useState(false);
-  const statuses: Status[] = ["por_hacer", "en_proceso", "en_revision", "completado"];
-  return (<Popover open={open} onOpenChange={setOpen}><PopoverTrigger asChild><button onClick={(e) => e.stopPropagation()} className={cn("rounded transition-all", flashId === cellId && "ring-2 ring-blue-500/50")}><Badge variant="outline" className={cn("text-[10px] cursor-pointer hover:opacity-80 transition-opacity whitespace-nowrap", statusColors[task.status])}>{statusLabels[task.status]}</Badge></button></PopoverTrigger><PopoverContent className="w-[170px] p-1" align="start">{statuses.map((s) => (<OptionItem key={s} selected={task.status === s} onClick={() => { onUpdate(s); setOpen(false); }}><span className="flex items-center gap-2"><span className={cn("h-2 w-2 rounded-full", statusDotColors[s])} />{statusLabels[s]}</span></OptionItem>))}</PopoverContent></Popover>);
+  const currentCol = columns.find((c) => c.id === task.columnId);
+  const accent = currentCol?.color ?? "#6b7280";
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button onClick={(e) => e.stopPropagation()} className={cn("rounded transition-all", flashId === cellId && "ring-2 ring-blue-500/50")}>
+          <Badge variant="outline" className="text-[10px] cursor-pointer hover:opacity-80 transition-opacity whitespace-nowrap gap-1.5 bg-muted/30">
+            <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: accent }} />
+            {currentCol?.title ?? "Sin columna"}
+          </Badge>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[200px] p-1" align="start">
+        {columns.map((c) => (
+          <OptionItem key={c.id} selected={task.columnId === c.id} onClick={() => { onMove(c.id); setOpen(false); }}>
+            <span className="flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: c.color ?? "#6b7280" }} />
+              {c.title}
+            </span>
+          </OptionItem>
+        ))}
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 // ── Priority cell ───────────────────────────────────────────
@@ -628,20 +652,21 @@ function InsertColumnDialog({ onInsert, onClose }: { onInsert: (label: string, t
 }
 
 // ── Column filter popover ───────────────────────────────────
-function ColumnFilterContent({ tasks, col, allMembers, activeFilter, onApply, onClear }: {
+function ColumnFilterContent({ tasks, col, allMembers, boardColumns, activeFilter, onApply, onClear }: {
   tasks: Task[]; col: TableColumnDef;
   allMembers: { id: string; name: string }[];
+  boardColumns?: { id: string; title: string }[];
   activeFilter: string[] | undefined;
   onApply: (values: string[]) => void; onClear: () => void;
 }) {
   const uniqueValues = useMemo(() => {
     const set = new Set<string>();
     tasks.forEach((t) => {
-      const v = getCellValue(t, col, allMembers);
+      const v = getCellValue(t, col, allMembers, boardColumns);
       if (v) set.add(v);
     });
     return Array.from(set).sort();
-  }, [tasks, col, allMembers]);
+  }, [tasks, col, allMembers, boardColumns]);
 
   const [selected, setSelected] = useState<Set<string>>(() => new Set(activeFilter ?? []));
 
@@ -682,13 +707,14 @@ function ColumnFilterContent({ tasks, col, allMembers, activeFilter, onApply, on
 
 // ── Column header menu ──────────────────────────────────────
 function ColumnHeaderMenu({
-  col, sortKey, sortDir, tasks, allMembers,
+  col, sortKey, sortDir, tasks, allMembers, boardColumns,
   onSort, onRenameStart,
 }: {
   col: TableColumnDef;
   sortKey: string; sortDir: SortDir;
   tasks: Task[];
   allMembers: { id: string; name: string }[];
+  boardColumns?: { id: string; title: string }[];
   onSort: (key: string, dir: SortDir) => void;
   onRenameStart: () => void;
 }) {
@@ -775,7 +801,7 @@ function ColumnHeaderMenu({
             <span className="text-xs font-medium">Filtro: {col.label}</span>
             <button onClick={() => setFilterOpen(false)} className="rounded p-0.5 hover:bg-muted"><X className="h-3 w-3" /></button>
           </div>
-          <ColumnFilterContent tasks={tasks} col={col} allMembers={allMembers} activeFilter={columnFilters[col.id]} onApply={(v) => setColumnFilter(col.id, v)} onClear={() => clearColumnFilter(col.id)} />
+          <ColumnFilterContent tasks={tasks} col={col} allMembers={allMembers} boardColumns={boardColumns} activeFilter={columnFilters[col.id]} onApply={(v) => setColumnFilter(col.id, v)} onClear={() => clearColumnFilter(col.id)} />
         </div>
       )}
 
@@ -853,8 +879,10 @@ export function TableView() {
     addCustomStore, addCustomCampaignType, duplicateTask, deleteTask,
     getAllStores, getAllCampaignTypes, getAllTeamMembers, addQuickTask,
     boards, activeBoardId, getAllViews, activeViewId, setActiveViewId,
-    reorderBoardTasks, moveTaskToBoard,
+    reorderBoardTasks, moveTaskToBoard, moveTask,
   } = useBoardStore();
+  const activeBoard = boards.find((b) => b.id === activeBoardId);
+  const boardColumns = activeBoard?.columns ?? [];
 
   const columns = useTableColumnsStore((s) => s.columns);
   const columnFilters = useTableColumnsStore((s) => s.columnFilters);
@@ -897,14 +925,19 @@ export function TableView() {
       const col = columns.find((c) => c.id === colId);
       if (!col) continue;
       result = result.filter((t) => {
-        const cv = getCellValue(t, col, allMembers);
+        const cv = getCellValue(t, col, allMembers, boardColumns);
         return valSet.has(cv);
       });
     }
     return result;
-  }, [globalFiltered, columnFilters, columns, allMembers]);
+  }, [globalFiltered, columnFilters, columns, allMembers, boardColumns]);
 
-  const sorted = sortTasks(filtered, sortKey, sortDir, allMembers);
+  const columnOrderMap = useMemo(() => {
+    const map: Record<string, number> = {};
+    boardColumns.forEach((c, idx) => { map[c.id] = idx; });
+    return map;
+  }, [boardColumns]);
+  const sorted = sortTasks(filtered, sortKey, sortDir, allMembers, columnOrderMap);
 
   const handleSort = (key: string, dir: SortDir) => { setSortKey(key); setSortDir(dir); };
 
@@ -986,7 +1019,7 @@ export function TableView() {
     const cid = `${task.id}-${col.key}`;
     switch (col.key) {
       case "title": return <TitleCell task={task} onSave={(v) => handleTextUpdate(task.id, "title", v, "title")} cellId={cid} flashId={flashId} />;
-      case "status": return <StatusCell task={task} onUpdate={(s) => handleFieldUpdate(task.id, "status", s, "status")} cellId={cid} flashId={flashId} />;
+      case "status": return <StatusCell task={task} columns={boardColumns} onMove={(colId) => { moveTask(task.id, colId); flash(`${task.id}-status`); }} cellId={cid} flashId={flashId} />;
       case "store": return <StoreCell task={task} onUpdate={(s) => handleFieldUpdate(task.id, "store", s, "store")} onAddStore={addCustomStore} allStores={allStores} cellId={cid} flashId={flashId} />;
       case "adAccount": return <EditableTextCell value={task.adAccount} onSave={(v) => handleFieldUpdate(task.id, "adAccount", v, "adAccount")} cellId={cid} flashId={flashId} />;
       case "campaignType": return <CampaignTypeCell task={task} onUpdate={(t) => handleFieldUpdate(task.id, "campaignType", t, "campaignType")} onAddType={addCustomCampaignType} allTypes={allCampaignTypes} cellId={cid} flashId={flashId} />;
@@ -1129,6 +1162,7 @@ export function TableView() {
                             sortDir={sortDir}
                             tasks={filtered}
                             allMembers={allMembers}
+                            boardColumns={boardColumns}
                             onSort={handleSort}
                             onRenameStart={() => { setRenamingColId(col.id); setRenameVal(col.label); }}
                           />

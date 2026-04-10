@@ -51,9 +51,9 @@ export async function POST(request: Request) {
   try {
     const { user, error } = await getAuthUser(request);
     if (error) return error;
-    const { text, channelType, channelId, senderId } = await request.json();
-    if (!text || !channelType || !channelId || !senderId) {
-      return NextResponse.json({ error: "Campos requeridos: text, channelType, channelId, senderId" }, { status: 400 });
+    const { text, channelType, channelId } = await request.json();
+    if (!text || !channelType || !channelId) {
+      return NextResponse.json({ error: "Campos requeridos: text, channelType, channelId" }, { status: 400 });
     }
 
     // Permission: board chat requires board access
@@ -62,8 +62,9 @@ export async function POST(request: Request) {
       if (!access.hasAccess) return NextResponse.json({ error: "Sin acceso al board" }, { status: 403 });
     }
 
+    // Use authenticated user as sender — never trust senderId from client
     const message = await prisma.chatMessage.create({
-      data: { text, channelType, channelId, senderId },
+      data: { text, channelType, channelId, senderId: user!.id },
       include: { sender: { select: { id: true, name: true, avatarColor: true } } },
     });
 

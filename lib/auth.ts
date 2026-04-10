@@ -5,17 +5,12 @@ import { getSessionUserId } from "@/lib/session";
 /**
  * Extract and validate user from request.
  * Reads the httpOnly session cookie, verifies the JWT, and looks up the user.
- * Falls back to x-user-id header for backwards compatibility during transition.
  * Returns the user object or a 401 NextResponse.
  */
-export async function getAuthUser(request: Request) {
-  // 1. Try httpOnly cookie first (secure path)
-  let userId = await getSessionUserId();
-
-  // 2. Fallback to x-user-id header (will be removed in the future)
-  if (!userId) {
-    userId = request.headers.get("x-user-id");
-  }
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export async function getAuthUser(_request: Request) {
+  // Read httpOnly cookie and verify JWT signature
+  const userId = await getSessionUserId();
 
   if (!userId) {
     return { user: null, error: NextResponse.json({ error: "No autenticado" }, { status: 401 }) };

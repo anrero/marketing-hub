@@ -161,11 +161,6 @@ function transformApiPage(apiPage: any): PageNode {
 function getSidebarAuthHeaders(contentType = true): Record<string, string> {
   const headers: Record<string, string> = {};
   if (contentType) headers["Content-Type"] = "application/json";
-  try {
-    const authData = JSON.parse(localStorage.getItem("mh-auth-storage") || "{}");
-    const userId = authData?.state?.currentUser?.id;
-    if (userId) headers["x-user-id"] = userId;
-  } catch { /* ignore */ }
   return headers;
 }
 

@@ -26,12 +26,6 @@ export async function middleware(request: NextRequest) {
       return NextResponse.next();
     }
 
-    // Fallback: check x-user-id header for backwards compatibility
-    const headerUserId = request.headers.get("x-user-id");
-    if (headerUserId) {
-      return NextResponse.next();
-    }
-
     return NextResponse.json({ error: "No autenticado" }, { status: 401 });
   }
 

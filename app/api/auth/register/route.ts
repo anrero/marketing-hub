@@ -122,6 +122,7 @@ export async function POST(request: Request) {
           name: "Mi primer board",
           emoji: "📋",
           workspaceId: personalWs.id,
+          createdById: user.id,
           position: 0,
           columns: { create: defaultColumns },
         },

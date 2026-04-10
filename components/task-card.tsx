@@ -149,8 +149,8 @@ export function TaskCard({ task }: { task: Task }) {
         ))}
         <ContextMenuSeparator />
         <div className="px-2 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase">Mover a</div>
-        {cols.filter((c) => c.id !== task.status).map((c) => (
-          <ContextMenuItem key={c.id} onClick={() => { moveTask(task.id, c.id as "por_hacer" | "en_proceso" | "en_revision" | "completado"); toast("Tarea movida"); }}>
+        {cols.filter((c) => c.id !== task.columnId).map((c) => (
+          <ContextMenuItem key={c.id} onClick={() => { moveTask(task.id, c.id); toast("Tarea movida"); }}>
             {c.title}
           </ContextMenuItem>
         ))}

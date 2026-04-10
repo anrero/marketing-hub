@@ -39,6 +39,7 @@ export interface Task {
   id: string;
   title: string;
   status: Status;
+  columnId?: string | null;
   priority: Priority;
   store: Store;
   assigneeId: string;
@@ -110,10 +111,10 @@ export interface SavedView {
 }
 
 export interface Column {
-  id: string;
-  title: string;
-  color?: string;
-  serverId?: string; // Real server UUID for API calls
+  id: string;       // Server column UUID (cuid)
+  title: string;    // Display name
+  color?: string;   // Hex color, e.g. "#6b7280"
+  position?: number;
 }
 
 export interface Board {

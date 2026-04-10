@@ -20,6 +20,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/compon
 import { useSidebarStore, type Block, type BlockType } from "@/stores/sidebar-store";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import DOMPurify from "dompurify";
 import hljs from "highlight.js/lib/core";
 import javascript from "highlight.js/lib/languages/javascript";
 import typescript from "highlight.js/lib/languages/typescript";
@@ -42,6 +43,9 @@ hljs.registerLanguage("sql", sql);
 hljs.registerLanguage("bash", bash);
 hljs.registerLanguage("php", php);
 hljs.registerLanguage("ruby", ruby);
+
+/** Sanitize HTML before setting innerHTML to prevent stored XSS */
+const sanitize = (html: string) => DOMPurify.sanitize(html);
 
 // ── Slash command definitions ───────────────────────────────
 interface SlashCmd { id: BlockType; icon: React.ReactNode; label: string; desc: string; group: string; shortcut?: string }
@@ -239,7 +243,7 @@ function BlockEditor({ block, index, totalBlocks, onUpdate, onDelete, onInsertAf
   // Sync content from store into contentEditable (only on mount or block.id change)
   useEffect(() => {
     if (ref.current && ref.current.innerHTML !== block.content) {
-      ref.current.innerHTML = block.content;
+      ref.current.innerHTML = sanitize(block.content);
     }
   }, [block.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -413,7 +417,7 @@ function BlockEditor({ block, index, totalBlocks, onUpdate, onDelete, onInsertAf
               const lang = block.language ?? "javascript";
               try {
                 const result = hljs.highlight(text, { language: lang, ignoreIllegals: true });
-                el.innerHTML = result.value;
+                el.innerHTML = sanitize(result.value);
               } catch { /* ignore */ }
             }
           }} data-placeholder="// código..." />
@@ -660,7 +664,7 @@ function TocBlock({ blocks }: { blocks: Block[] }) {
 function ToggleChildrenEditor({ content, onChange }: { content: string; onChange: (val: string) => void }) {
   const elRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
-  useEffect(() => { if (elRef.current && elRef.current.innerHTML !== content) elRef.current.innerHTML = content; }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (elRef.current && elRef.current.innerHTML !== content) elRef.current.innerHTML = sanitize(content); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const save = useCallback(() => { if (elRef.current) onChange(elRef.current.innerHTML); }, [onChange]);
   return (
     <div
@@ -680,7 +684,7 @@ function ToggleChildrenEditor({ content, onChange }: { content: string; onChange
 function ColumnCellEditor({ content, placeholder, onChange }: { content: string; placeholder: string; onChange: (val: string) => void }) {
   const elRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
-  useEffect(() => { if (elRef.current && elRef.current.innerHTML !== content) elRef.current.innerHTML = content; }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (elRef.current && elRef.current.innerHTML !== content) elRef.current.innerHTML = sanitize(content); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const save = useCallback(() => { if (elRef.current) onChange(elRef.current.innerHTML); }, [onChange]);
   return (
     <div

@@ -2,13 +2,11 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionUserId } from "@/lib/session";
 
-export async function GET(request: Request) {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export async function GET(_request: Request) {
   try {
-    // Try cookie first, then header fallback
-    let userId = await getSessionUserId();
-    if (!userId) {
-      userId = request.headers.get("x-user-id");
-    }
+    // Read httpOnly cookie only — no header fallback
+    const userId = await getSessionUserId();
     if (!userId) {
       return NextResponse.json({ error: "No autenticado" }, { status: 401 });
     }

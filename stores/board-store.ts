@@ -3,7 +3,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Task, Status, Board, TeamMember, Subtask, SavedView, ReminderOption, Priority, Tag, TaskTemplate } from "@/types";
-import { COLUMNS, TEAM_MEMBERS, STORES, CAMPAIGN_TYPES } from "@/lib/mock-data";
+import { TEAM_MEMBERS, STORES, CAMPAIGN_TYPES } from "@/lib/mock-data";
 
 
 // Lazy import to avoid circular dependency
@@ -72,11 +72,12 @@ interface BoardState {
   setSettingsOpen: (open: boolean) => void;
   setCommandOpen: (open: boolean) => void;
   setActiveViewId: (id: string) => void;
-  moveTask: (taskId: string, newStatus: Status) => void;
+  /** Target can be either a column id (cuid) or a legacy Status string. */
+  moveTask: (taskId: string, target: string) => void;
   updateTaskWithActivity: (taskId: string, updates: Partial<Task>, authorId?: string) => void;
   updateTask: (taskId: string, updates: Partial<Task>) => void;
   addTask: (task: Task) => void;
-  addQuickTask: (title: string, overrides?: { status?: Status; dueDate?: string }) => void;
+  addQuickTask: (title: string, overrides?: { status?: Status; dueDate?: string; columnId?: string }) => void;
   addBoard: (name: string) => void;
   renameBoard: (id: string, name: string) => void;
   deleteBoard: (id: string) => void;
@@ -84,10 +85,11 @@ interface BoardState {
   removeAttachment: (taskId: string, index: number) => void;
   reorderBoardTasks: (taskIds: string[]) => void;
   reorderBoards: (boardIds: string[]) => void;
-  addColumn: (title: string, afterColumnId?: string, beforeColumnId?: string) => void;
-  removeColumn: (columnId: string) => void;
+  addColumn: (title: string, afterColumnId?: string, beforeColumnId?: string) => Promise<string | null>;
+  removeColumn: (columnId: string, targetColumnId?: string) => void;
   renameColumn: (columnId: string, title: string) => void;
   setColumnColor: (columnId: string, color: string) => void;
+  reorderColumns: (orderedColumnIds: string[]) => void;
   addCustomStore: (store: string) => void;
   removeCustomStore: (store: string) => void;
   addCustomCampaignType: (type: string) => void;
@@ -213,10 +215,7 @@ function getCurrentUserId(): string {
 // ── API helpers (fire-and-forget with error logging) ──
 
 function getAuthHeaders(): Record<string, string> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  const userId = getCurrentUserId();
-  if (userId) headers["x-user-id"] = userId;
-  return headers;
+  return { "Content-Type": "application/json" };
 }
 
 function apiPatchTask(taskId: string, data: Record<string, unknown>) {
@@ -300,6 +299,7 @@ function transformApiTask(apiTask: any): Task {
       title: s.title,
       completed: s.completed,
     })),
+    columnId: apiTask.columnId ?? null,
     tags: (apiTask.tags || []).map((t: { tag: { id: string } }) => t.tag.id),
     reminder: apiTask.reminder || undefined,
     archivedAt: apiTask.archivedAt || null,
@@ -312,16 +312,27 @@ function transformApiTask(apiTask: any): Task {
   };
 }
 
-// Map server column names to frontend status IDs
-const COLUMN_NAME_TO_STATUS: Record<string, string> = {
-  "por hacer": "por_hacer",
-  "en proceso": "en_proceso",
-  "en revisión": "en_revision",
-  "completado": "completado",
-};
+// Derive a status string from a column name. This keeps legacy hardcoded
+// status checks (e.g. "completado") working for the four default columns; any
+// custom column gets a sluggified version of its name.
+function deriveStatusFromName(name: string): string {
+  const n = name.toLowerCase().trim();
+  if (n.includes("hacer")) return "por_hacer";
+  if (n.includes("proceso") || n.includes("progreso")) return "en_proceso";
+  if (n.includes("revisi")) return "en_revision";
+  if (n.includes("complet") || n === "done" || n === "hecho" || n === "listo") return "completado";
+  return n.replace(/\s+/g, "_");
+}
 
-function columnNameToStatusId(name: string): string {
-  return COLUMN_NAME_TO_STATUS[name.toLowerCase()] || name.toLowerCase().replace(/\s+/g, "_");
+// Legacy mapping kept for backfilling tasks whose columnId is null but whose
+// status string matches a default column. New code should never write these.
+function statusMatchesColumn(status: string, columnName: string): boolean {
+  const n = columnName.toLowerCase().trim();
+  if (status === "por_hacer") return n.includes("hacer");
+  if (status === "en_proceso") return n.includes("proceso") || n.includes("progreso");
+  if (status === "en_revision") return n.includes("revisi");
+  if (status === "completado") return n.includes("complet") || n === "done" || n === "hecho" || n === "listo";
+  return n.replace(/\s+/g, "_") === status;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -331,13 +342,36 @@ function transformApiBoard(apiBoard: any, taskIds: string[]): Board {
     name: apiBoard.name,
     workspaceId: apiBoard.workspaceId,
     shareCount: apiBoard._count?.shares ?? 0,
-    columns: (apiBoard.columns || []).map((c: { id: string; name: string; color?: string }) => ({
-      id: columnNameToStatusId(c.name),
-      title: c.name,
-      serverId: c.id, // Keep the real server UUID for API calls
-    })),
+    columns: (apiBoard.columns || [])
+      .slice()
+      .sort((a: { position?: number }, b: { position?: number }) => (a.position ?? 0) - (b.position ?? 0))
+      .map((c: { id: string; name: string; color?: string; position?: number }) => ({
+        id: c.id,
+        title: c.name,
+        color: c.color,
+        position: c.position ?? 0,
+      })),
     taskIds,
   };
+}
+
+// Lazily attach a columnId to legacy tasks whose columnId is null, by matching
+// their status string against the board's columns.
+function backfillColumnIds(tasks: Task[], boards: Board[]): Task[] {
+  const boardColsById: Record<string, { id: string; title: string }[]> = {};
+  for (const b of boards) boardColsById[b.id] = b.columns.map((c) => ({ id: c.id, title: c.title }));
+  return tasks.map((t) => {
+    if (t.columnId) return t;
+    // find board this task belongs to
+    const boardId = boards.find((b) => b.taskIds.includes(t.id))?.id;
+    if (!boardId) return t;
+    const cols = boardColsById[boardId] ?? [];
+    const match = cols.find((c) => statusMatchesColumn(t.status, c.title));
+    if (match) return { ...t, columnId: match.id };
+    // Fallback: first column
+    if (cols[0]) return { ...t, columnId: cols[0].id };
+    return t;
+  });
 }
 
 export const useBoardStore = create<BoardState>()(persist((set, get) => ({
@@ -417,11 +451,13 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
         boards.push(transformApiBoard(apiBoards[i], tasks.map((t: Task) => t.id)));
       }
 
+      const backfilled = backfillColumnIds(allTasks, boards);
+
       const state = get();
 
       set({
         boards,
-        tasks: allTasks,
+        tasks: backfilled,
         serverTeamMembers: serverMembers,
         ...(serverTags.length > 0 ? { tags: serverTags } : {}),
         activeBoardId: state.activeBoardId && boards.some((b) => b.id === state.activeBoardId)
@@ -459,9 +495,21 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
       }
 
       const state = get();
+      // Preserve locally-created tasks that haven't been synced to server yet
+      // (temp IDs like "t1712345000" that aren't in allTasks)
+      const localOnlyTasks = state.tasks.filter(t =>
+        /^t\d+$/.test(t.id) && !allTasks.some(st => st.id === t.id)
+      );
+      const localOnlyIds = localOnlyTasks.map(t => t.id);
+      const mergedBoards = boards.map(b =>
+        b.id === state.activeBoardId && localOnlyIds.length > 0
+          ? { ...b, taskIds: [...b.taskIds, ...localOnlyIds] }
+          : b
+      );
+      const backfilled = backfillColumnIds([...allTasks, ...localOnlyTasks], mergedBoards);
       set({
-        boards,
-        tasks: allTasks,
+        boards: mergedBoards,
+        tasks: backfilled,
         activeBoardId: state.activeBoardId && boards.some((b) => b.id === state.activeBoardId)
           ? state.activeBoardId
           : boards[0]?.id || "",
@@ -486,32 +534,48 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
   setCommandOpen: (open) => set({ commandOpen: open }),
   setActiveViewId: (id) => set({ activeViewId: id }),
 
-  moveTask: (taskId, newStatus) => {
+  moveTask: (taskId, target) => {
     const state = get();
     const task = state.tasks.find((t) => t.id === taskId);
-    if (!task || task.status === newStatus) return;
+    if (!task) return;
+    // Accept either a column id (cuid) or a legacy Status string.
+    const board = state.boards.find((b) => b.id === state.activeBoardId);
+    if (!board) return;
+    const targetStr = String(target);
+    let targetCol = board.columns.find((c) => c.id === targetStr);
+    if (!targetCol) {
+      targetCol = board.columns.find((c) => statusMatchesColumn(targetStr, c.title));
+    }
+    if (!targetCol) return;
+    if (task.columnId === targetCol.id) return;
+
+    const oldCol = board.columns.find((c) => c.id === task.columnId);
+    const oldLabel = oldCol?.title ?? statusLabels[task.status] ?? task.status;
+    const newLabel = targetCol.title;
     const oldStatus = task.status;
+    const newStatus = deriveStatusFromName(targetCol.title) as Status;
+
     set((s) => ({
       tasks: s.tasks.map((t) =>
-        t.id === taskId ? { ...t, status: newStatus, activity: [...t.activity, {
+        t.id === taskId ? { ...t, columnId: targetCol!.id, status: newStatus, activity: [...t.activity, {
           id: `a${Date.now()}_move`, authorId: getCurrentUserId(),
-          action: `movió de "${statusLabels[oldStatus]}" a "${statusLabels[newStatus]}"`,
-          field: "status", oldValue: statusLabels[oldStatus], newValue: statusLabels[newStatus],
+          action: `movió de "${oldLabel}" a "${newLabel}"`,
+          field: "status", oldValue: oldLabel, newValue: newLabel,
           createdAt: new Date().toISOString(),
         }] } : t
       ),
-      undoStack: [...s.undoStack, { action: "moveTask", data: { taskId, fromStatus: oldStatus, toStatus: newStatus } }].slice(-30),
+      undoStack: [...s.undoStack, { action: "moveTask", data: { taskId, fromColumnId: task.columnId ?? null, toColumnId: targetCol!.id, fromStatus: oldStatus, toStatus: newStatus } }].slice(-30),
       redoStack: [],
     }));
-    // Persist to server (status + activity)
+    // Persist to server — send columnId; the API will sync status automatically.
     const userId = getCurrentUserId();
     apiPatchTask(taskId, {
-      status: newStatus,
+      columnId: targetCol.id,
       _addActivity: {
-        action: `movió de "${statusLabels[oldStatus]}" a "${statusLabels[newStatus]}"`,
+        action: `movió de "${oldLabel}" a "${newLabel}"`,
         field: "status",
-        oldValue: statusLabels[oldStatus],
-        newValue: statusLabels[newStatus],
+        oldValue: oldLabel,
+        newValue: newLabel,
         userId,
       },
     });
@@ -568,9 +632,28 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
   },
 
   addTask: (task) => {
+    const stateBefore = get();
+    const activeBoard = stateBefore.boards.find((b) => b.id === stateBefore.activeBoardId);
+    // If the caller didn't specify a columnId, default to the first column of the active board.
+    const firstColId = activeBoard?.columns[0]?.id ?? null;
+    // Force-initialize every relational collection as a FRESH array so the new
+    // task can never share references with another task in memory — even if a
+    // future caller passes a spread of an existing store task.
+    const taskWithCol: Task = {
+      ...task,
+      columnId: task.columnId ?? firstColId,
+      status: task.status || (activeBoard?.columns[0]?.title ? deriveStatusFromName(activeBoard.columns[0].title) as Status : "por_hacer"),
+      urls: [],
+      attachments: [],
+      comments: [],
+      subtasks: [],
+      tags: [],
+      blockedBy: [],
+      activity: [...(task.activity ?? [])],
+    };
     set((state) => ({
-      tasks: [...state.tasks, task],
-      boards: state.boards.map((b) => b.id === state.activeBoardId ? { ...b, taskIds: [...b.taskIds, task.id] } : b),
+      tasks: [...state.tasks, taskWithCol],
+      boards: state.boards.map((b) => b.id === state.activeBoardId ? { ...b, taskIds: [...b.taskIds, taskWithCol.id] } : b),
     }));
     // Persist to server - the task was created locally with a temp ID
     // We POST to create it on the server, then update the local ID
@@ -581,45 +664,110 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
       headers: getAuthHeaders(),
       body: JSON.stringify({
         boardId,
-        title: task.title,
-        status: task.status,
-        priority: task.priority,
-        store: task.store || undefined,
-        assigneeId: task.assigneeId || undefined,
-        campaignType: task.campaignType || undefined,
-        campaignName: task.campaignName || undefined,
-        adAccount: task.adAccount || undefined,
-        dueDate: task.dueDate || undefined,
+        title: taskWithCol.title,
+        status: taskWithCol.status,
+        columnId: taskWithCol.columnId || undefined,
+        priority: taskWithCol.priority,
+        store: taskWithCol.store || undefined,
+        assigneeId: taskWithCol.assigneeId || undefined,
+        campaignType: taskWithCol.campaignType || undefined,
+        campaignName: taskWithCol.campaignName || undefined,
+        adAccount: taskWithCol.adAccount || undefined,
+        dueDate: taskWithCol.dueDate || undefined,
       }),
     }).then((r) => r.json()).then((saved) => {
-      // Replace temp ID with server ID
-      set((s) => ({
-        tasks: s.tasks.map((t) => t.id === task.id ? { ...t, id: saved.id } : t),
-        boards: s.boards.map((b) => ({
-          ...b,
-          taskIds: b.taskIds.map((id) => id === task.id ? saved.id : id),
-        })),
-        selectedTaskId: s.selectedTaskId === task.id ? saved.id : s.selectedTaskId,
-      }));
+      if (!saved || !saved.id) {
+        console.error("API create task: invalid response", saved);
+        return;
+      }
+      // Replace temp task with clean server data (ensures comments/activity come from DB).
+      // Preserve any relational data the user added while the POST was in-flight.
+      const serverTask = transformApiTask(saved);
+      set((s) => {
+        const localTask = s.tasks.find((t) => t.id === taskWithCol.id);
+        const localUrls = (localTask?.urls ?? []).filter((u) => u.id.startsWith("url_"));
+        const localSubs = (localTask?.subtasks ?? []).filter((s) => s.id.startsWith("st"));
+        const localTags = localTask?.tags ?? [];
+        const mergedTask: Task = {
+          ...serverTask,
+          activity: localTask?.activity ?? serverTask.activity,
+          urls: [...serverTask.urls, ...localUrls],
+          subtasks: [...(serverTask.subtasks ?? []), ...localSubs],
+          tags: Array.from(new Set([...(serverTask.tags ?? []), ...localTags])),
+        };
+        return {
+          tasks: s.tasks.map((t) => t.id === taskWithCol.id ? mergedTask : t),
+          boards: s.boards.map((b) => ({
+            ...b,
+            taskIds: b.taskIds.map((id) => id === taskWithCol.id ? saved.id : id),
+          })),
+          selectedTaskId: s.selectedTaskId === taskWithCol.id ? saved.id : s.selectedTaskId,
+        };
+      });
+      // Flush any in-flight local URLs/subtasks/tags to the server now that we
+      // have a real task ID. These were added optimistically and the initial
+      // PATCH would have 404'd against the temp ID. After flushing, refetch
+      // the task once to replace local temp URL/subtask IDs with real ones,
+      // so later delete/edit operations don't 404.
+      const state2 = get();
+      const mergedTask = state2.tasks.find((t) => t.id === saved.id);
+      if (mergedTask) {
+        const pending: Promise<unknown>[] = [];
+        for (const u of mergedTask.urls ?? []) {
+          if (u.id.startsWith("url_")) pending.push(apiPatchTask(saved.id, { _addUrl: u.url }));
+        }
+        for (const s of mergedTask.subtasks ?? []) {
+          if (s.id.startsWith("st")) pending.push(apiPatchTask(saved.id, { _addSubtask: s.title }));
+        }
+        if (pending.length > 0) {
+          Promise.allSettled(pending).then(() => {
+            fetch(`/api/tasks?boardId=${boardId}`, { headers: getAuthHeaders() })
+              .then((r) => r.ok ? r.json() : null)
+              .then((rows) => {
+                if (!Array.isArray(rows)) return;
+                const real = rows.find((x: { id: string }) => x.id === saved.id);
+                if (!real) return;
+                const fresh = transformApiTask(real);
+                set((s) => ({
+                  tasks: s.tasks.map((t) => t.id === saved.id ? {
+                    ...fresh,
+                    activity: t.activity, // keep local activity as source of truth
+                  } : t),
+                }));
+              }).catch(() => { /* best-effort reconciliation */ });
+          });
+        }
+      }
     }).catch((e) => console.error("API create task error:", e));
   },
 
-  addQuickTask: (title, overrides?: { status?: Status; dueDate?: string }) => {
+  addQuickTask: (title, overrides?: { status?: Status; dueDate?: string; columnId?: string }) => {
     const newId = `t${Date.now()}`;
-    const status = overrides?.status || "por_hacer";
     const dueDate = overrides?.dueDate || new Date().toISOString().split("T")[0];
+    const state0 = get();
+    const activeBoard = state0.boards.find((b) => b.id === state0.activeBoardId);
+    // Resolve target column: explicit override, then first column, then null.
+    let targetCol = overrides?.columnId ? activeBoard?.columns.find((c) => c.id === overrides.columnId) : undefined;
+    if (!targetCol && overrides?.status) {
+      targetCol = activeBoard?.columns.find((c) => statusMatchesColumn(overrides.status!, c.title));
+    }
+    if (!targetCol) targetCol = activeBoard?.columns[0];
+    const columnId = targetCol?.id ?? null;
+    const status = (targetCol ? deriveStatusFromName(targetCol.title) : overrides?.status || "por_hacer") as Status;
+    // Initialize EVERY relational collection explicitly so a newly-created
+    // quick task can never inherit data from a prior task via a stale reference.
     const newTask: Task = {
-      id: newId, title, status, priority: "media", store: "", assigneeId: getCurrentUserId(),
+      id: newId, title, status, columnId, priority: "media", store: "", assigneeId: getCurrentUserId(),
       campaignType: "", campaignName: "", adAccount: "", dueDate,
       urls: [], attachments: [], comments: [], activity: [
         { id: `a${Date.now()}_create`, authorId: getCurrentUserId(), action: "creó la tarea", createdAt: new Date().toISOString() }
-      ], subtasks: [],
+      ], subtasks: [], tags: [], blockedBy: [],
     };
     set((state) => ({
       tasks: [...state.tasks, newTask],
       boards: state.boards.map((b) => b.id === state.activeBoardId ? { ...b, taskIds: [...b.taskIds, newId] } : b),
     }));
-    // Persist to server — include status and dueDate in the initial POST to avoid race condition
+    // Persist to server — include columnId so the server assigns correctly
     const state = get();
     fetch("/api/tasks", {
       method: "POST",
@@ -628,25 +776,80 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
         boardId: state.activeBoardId,
         title,
         status,
+        columnId: columnId || undefined,
         priority: "media",
         dueDate,
       }),
     }).then((r) => r.json()).then((saved) => {
-      set((s) => ({
-        tasks: s.tasks.map((t) => t.id === newId ? { ...t, id: saved.id } : t),
-        boards: s.boards.map((b) => ({
-          ...b,
-          taskIds: b.taskIds.map((id) => id === newId ? saved.id : id),
-        })),
-        selectedTaskId: s.selectedTaskId === newId ? saved.id : s.selectedTaskId,
-      }));
+      if (!saved || !saved.id) {
+        console.error("API quick task: invalid response", saved);
+        return;
+      }
+      // Replace temp task with server data, preserving any optimistic local
+      // URLs/subtasks/tags the user added before this POST resolved.
+      const serverTask = transformApiTask(saved);
+      set((s) => {
+        const localTask = s.tasks.find((t) => t.id === newId);
+        const localUrls = (localTask?.urls ?? []).filter((u) => u.id.startsWith("url_"));
+        const localSubs = (localTask?.subtasks ?? []).filter((s) => s.id.startsWith("st"));
+        const localTags = localTask?.tags ?? [];
+        const mergedTask: Task = {
+          ...serverTask,
+          activity: localTask?.activity ?? serverTask.activity,
+          urls: [...serverTask.urls, ...localUrls],
+          subtasks: [...(serverTask.subtasks ?? []), ...localSubs],
+          tags: Array.from(new Set([...(serverTask.tags ?? []), ...localTags])),
+        };
+        return {
+          tasks: s.tasks.map((t) => t.id === newId ? mergedTask : t),
+          boards: s.boards.map((b) => ({
+            ...b,
+            taskIds: b.taskIds.map((id) => id === newId ? saved.id : id),
+          })),
+          selectedTaskId: s.selectedTaskId === newId ? saved.id : s.selectedTaskId,
+        };
+      });
+      // Flush any in-flight local URLs/subtasks to the server now that we
+      // have a real task ID, then reconcile the local temp IDs with the real
+      // ones so later delete/edit operations don't 404.
+      const state2 = get();
+      const mergedTask = state2.tasks.find((t) => t.id === saved.id);
+      if (mergedTask) {
+        const pending: Promise<unknown>[] = [];
+        for (const u of mergedTask.urls ?? []) {
+          if (u.id.startsWith("url_")) pending.push(apiPatchTask(saved.id, { _addUrl: u.url }));
+        }
+        for (const s of mergedTask.subtasks ?? []) {
+          if (s.id.startsWith("st")) pending.push(apiPatchTask(saved.id, { _addSubtask: s.title }));
+        }
+        if (pending.length > 0) {
+          Promise.allSettled(pending).then(() => {
+            fetch(`/api/tasks?boardId=${state.activeBoardId}`, { headers: getAuthHeaders() })
+              .then((r) => r.ok ? r.json() : null)
+              .then((rows) => {
+                if (!Array.isArray(rows)) return;
+                const real = rows.find((x: { id: string }) => x.id === saved.id);
+                if (!real) return;
+                const fresh = transformApiTask(real);
+                set((s) => ({
+                  tasks: s.tasks.map((t) => t.id === saved.id ? {
+                    ...fresh,
+                    activity: t.activity,
+                  } : t),
+                }));
+              }).catch(() => { /* best-effort reconciliation */ });
+          });
+        }
+      }
     }).catch((e) => console.error("API quick task error:", e));
   },
 
   addBoard: (name) => {
     const newId = `b${Date.now()}`;
+    // Optimistic placeholder: no columns yet. The server will return the real
+    // board with its default columns, and we swap it in below.
     set((state) => ({
-      boards: [...state.boards, { id: newId, name, columns: COLUMNS, taskIds: [] }],
+      boards: [...state.boards, { id: newId, name, columns: [], taskIds: [] }],
       activeBoardId: newId,
     }));
     // Persist to server
@@ -693,7 +896,21 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
       if (task) {
         const ntid = `t${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
         newTaskIds.push(ntid);
-        newTasks.push({ ...task, id: ntid, title: task.title, comments: [], activity: [{ id: `a${Date.now()}`, authorId: getCurrentUserId(), action: "duplicó la tarea", createdAt: new Date().toISOString() }] });
+        // Deep-clone every relational collection so the duplicated task does
+        // NOT share array references with the original — otherwise a later
+        // non-immutable mutation of the original would leak into the copy.
+        newTasks.push({
+          ...task,
+          id: ntid,
+          title: task.title,
+          comments: [],
+          activity: [{ id: `a${Date.now()}`, authorId: getCurrentUserId(), action: "duplicó la tarea", createdAt: new Date().toISOString() }],
+          urls: (task.urls ?? []).map((u) => ({ ...u })),
+          attachments: (task.attachments ?? []).map((a) => ({ ...a })),
+          subtasks: (task.subtasks ?? []).map((s) => ({ ...s })),
+          tags: [...(task.tags ?? [])],
+          blockedBy: [...(task.blockedBy ?? [])],
+        });
       }
     }
     set((s) => ({
@@ -747,83 +964,109 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
       boards: boardIds.map((id) => state.boards.find((b) => b.id === id)!).filter(Boolean),
     })),
 
-  addColumn: (title, afterColumnId, beforeColumnId) => {
+  addColumn: async (title, afterColumnId, beforeColumnId) => {
     const s = get();
     const board = s.boards.find((b) => b.id === s.activeBoardId);
-    if (!board) return;
-    const newColId = `col_${Date.now()}`;
-    const newCol = { id: newColId, title };
+    if (!board) return null;
     const cols = [...board.columns];
     let position = cols.length;
     if (beforeColumnId) {
       const idx = cols.findIndex((c) => c.id === beforeColumnId);
-      cols.splice(Math.max(0, idx), 0, newCol);
       position = Math.max(0, idx);
     } else if (afterColumnId) {
       const idx = cols.findIndex((c) => c.id === afterColumnId);
-      cols.splice(idx + 1, 0, newCol);
       position = idx + 1;
-    } else {
-      cols.push(newCol);
     }
-    set((st) => ({ boards: st.boards.map((b) => b.id === st.activeBoardId ? { ...b, columns: cols } : b) }));
-    // Persist to server
-    fetch("/api/columns", {
-      method: "POST",
-      headers: getAuthHeaders(),
-      body: JSON.stringify({ boardId: s.activeBoardId, name: title, position }),
-    }).then((r) => r.json()).then((saved) => {
+    // Create on server first so we use the real UUID everywhere.
+    try {
+      const res = await fetch("/api/columns", {
+        method: "POST",
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ boardId: s.activeBoardId, name: title, position }),
+      });
+      if (!res.ok) {
+        console.error("API add column failed:", res.status);
+        return null;
+      }
+      const saved = await res.json();
+      const newCol = { id: saved.id, title: saved.name, color: saved.color, position: saved.position };
+      // Shift existing columns at/after position, then splice in the new one.
+      const next = [...board.columns];
+      for (let i = 0; i < next.length; i++) {
+        if ((next[i].position ?? 0) >= position) next[i] = { ...next[i], position: (next[i].position ?? 0) + 1 };
+      }
+      next.splice(position, 0, newCol);
       set((st) => ({
-        boards: st.boards.map((b) => b.id === st.activeBoardId
-          ? { ...b, columns: b.columns.map((c) => c.id === newColId ? { ...c, id: columnNameToStatusId(saved.name) } : c) }
-          : b),
+        boards: st.boards.map((b) => b.id === st.activeBoardId ? { ...b, columns: next } : b),
       }));
-    }).catch((e) => console.error("API add column error:", e));
+      return saved.id as string;
+    } catch (e) {
+      console.error("API add column error:", e);
+      return null;
+    }
   },
 
-  removeColumn: (columnId) => {
+  removeColumn: (columnId, targetColumnId) => {
     const s = get();
     const board = s.boards.find((b) => b.id === s.activeBoardId);
     if (!board) return;
-    const col = board.columns.find((c) => c.id === columnId);
-    const realId = col?.serverId || columnId;
+    const targetCol = targetColumnId ? board.columns.find((c) => c.id === targetColumnId) : null;
+
     set((st) => ({
       boards: st.boards.map((b) => b.id === st.activeBoardId ? { ...b, columns: b.columns.filter((c) => c.id !== columnId) } : b),
-      tasks: st.tasks.map((t) => board.taskIds.includes(t.id) && t.status === columnId as Status ? { ...t, status: "por_hacer" as Status } : t),
+      tasks: st.tasks.map((t) => {
+        if (t.columnId !== columnId) return t;
+        if (targetCol) {
+          return { ...t, columnId: targetCol.id, status: deriveStatusFromName(targetCol.title) as Status };
+        }
+        return { ...t, columnId: null };
+      }),
     }));
-    // Use the real server UUID for the delete
-    fetch(`/api/columns?id=${realId}`, { method: "DELETE", headers: getAuthHeaders() })
+    const qs = targetColumnId ? `?id=${columnId}&targetColumnId=${targetColumnId}` : `?id=${columnId}`;
+    fetch(`/api/columns${qs}`, { method: "DELETE", headers: getAuthHeaders() })
       .catch((e) => console.error("API delete column error:", e));
   },
 
   renameColumn: (columnId, title) => {
-    const s = get();
-    const board = s.boards.find((b) => b.id === s.activeBoardId);
-    const col = board?.columns.find((c) => c.id === columnId);
-    const realId = col?.serverId || columnId;
     set((st) => ({
       boards: st.boards.map((b) => b.id === st.activeBoardId ? { ...b, columns: b.columns.map((c) => c.id === columnId ? { ...c, title } : c) } : b),
     }));
     fetch("/api/columns", {
       method: "PATCH",
       headers: getAuthHeaders(),
-      body: JSON.stringify({ id: realId, name: title }),
+      body: JSON.stringify({ id: columnId, name: title }),
     }).catch((e) => console.error("API rename column error:", e));
   },
 
   setColumnColor: (columnId, color) => {
-    const s = get();
-    const board = s.boards.find((b) => b.id === s.activeBoardId);
-    const col = board?.columns.find((c) => c.id === columnId);
-    const realId = col?.serverId || columnId;
     set((st) => ({
       boards: st.boards.map((b) => b.id === st.activeBoardId ? { ...b, columns: b.columns.map((c) => c.id === columnId ? { ...c, color } : c) } : b),
     }));
     fetch("/api/columns", {
       method: "PATCH",
       headers: getAuthHeaders(),
-      body: JSON.stringify({ id: realId, color }),
+      body: JSON.stringify({ id: columnId, color }),
     }).catch((e) => console.error("API set column color error:", e));
+  },
+
+  reorderColumns: (orderedColumnIds) => {
+    const s = get();
+    const board = s.boards.find((b) => b.id === s.activeBoardId);
+    if (!board) return;
+    const byId = new Map(board.columns.map((c) => [c.id, c]));
+    const next = orderedColumnIds.map((id, idx) => {
+      const c = byId.get(id);
+      return c ? { ...c, position: idx } : null;
+    }).filter((c): c is NonNullable<typeof c> => !!c);
+    set((st) => ({
+      boards: st.boards.map((b) => b.id === st.activeBoardId ? { ...b, columns: next } : b),
+    }));
+    const reorder = next.map((c, idx) => ({ id: c.id, position: idx }));
+    fetch("/api/columns", {
+      method: "PATCH",
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ reorder }),
+    }).catch((e) => console.error("API reorder columns error:", e));
   },
 
   addCustomStore: (store) => set((s) => ({ customStores: s.customStores.includes(store) ? s.customStores : [...s.customStores, store] })),
@@ -841,7 +1084,20 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     const task = state.tasks.find((t) => t.id === taskId);
     if (!task) return;
     const newId = `t${Date.now()}`;
-    const newTask: Task = { ...task, id: newId, title: `${task.title} (copia)`, comments: [], subtasks: [...(task.subtasks ?? []).map((s) => ({ ...s, id: `st${Date.now()}_${Math.random().toString(36).slice(2, 6)}` }))], activity: [{ id: `a${Date.now()}_create`, authorId: getCurrentUserId(), action: "duplicó la tarea", createdAt: new Date().toISOString() }] };
+    // Deep-clone every collection so the duplicated task does NOT share array
+    // references with the original (fixes URL/attachment/tag leak between tasks).
+    const newTask: Task = {
+      ...task,
+      id: newId,
+      title: `${task.title} (copia)`,
+      comments: [],
+      subtasks: (task.subtasks ?? []).map((s, i) => ({ ...s, id: `st${Date.now()}_${i}_${Math.random().toString(36).slice(2, 6)}` })),
+      urls: (task.urls ?? []).map((u, i) => ({ ...u, id: `url_${Date.now()}_${i}` })),
+      attachments: (task.attachments ?? []).map((a) => ({ ...a })),
+      tags: [...(task.tags ?? [])],
+      blockedBy: [...(task.blockedBy ?? [])],
+      activity: [{ id: `a${Date.now()}_create`, authorId: getCurrentUserId(), action: "duplicó la tarea", createdAt: new Date().toISOString() }],
+    };
     set((s) => ({ tasks: [...s.tasks, newTask], boards: s.boards.map((b) => b.id === s.activeBoardId ? { ...b, taskIds: [...b.taskIds, newId] } : b) }));
     // Persist to server
     fetch("/api/tasks", {
@@ -859,8 +1115,13 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
         description: task.description || undefined,
       }),
     }).then((r) => r.json()).then(async (saved) => {
+      const serverTask = transformApiTask(saved);
       set((s) => ({
-        tasks: s.tasks.map((t) => t.id === newId ? { ...t, id: saved.id } : t),
+        tasks: s.tasks.map((t) => t.id === newId ? {
+          ...serverTask,
+          activity: t.activity,
+          subtasks: t.subtasks, // Preserve local subtasks (copied separately below)
+        } : t),
         boards: s.boards.map((b) => ({ ...b, taskIds: b.taskIds.map((id) => id === newId ? saved.id : id) })),
       }));
       // Copy description
@@ -934,17 +1195,28 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
 
   // URLs
   addTaskUrl: (taskId, url) => {
-    const tempId = `url_${Date.now()}`;
+    const tempId = `url_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     set((state) => ({
-      tasks: state.tasks.map((t) => t.id === taskId ? { ...t, urls: [...t.urls, { id: tempId, url }] } : t),
+      tasks: state.tasks.map((t) => t.id === taskId ? { ...t, urls: [...(t.urls ?? []), { id: tempId, url }] } : t),
     }));
-    // Persist and update with real ID from server
+    // Persist and update with real ID from server. If the task is still a temp
+    // ID (race with the initial POST), the server will 404 — in that case we
+    // preserve the optimistic entry and skip the state overwrite.
     fetch(`/api/tasks/${taskId}`, {
       method: "PATCH",
       headers: getAuthHeaders(),
       body: JSON.stringify({ _addUrl: url }),
-    }).then((res) => res.json()).then((saved) => {
-      const realUrls = (saved.urls || []).map((u: { id: string; url: string }) => ({ id: u.id, url: u.url }));
+    }).then(async (res) => {
+      if (!res.ok) {
+        console.error("API add url failed:", res.status);
+        return null;
+      }
+      return res.json();
+    }).then((saved) => {
+      if (!saved || !Array.isArray(saved.urls)) return;
+      // Only replace URLs for the task that actually matches; Prisma scopes
+      // urls to this task so this is a per-task replacement.
+      const realUrls = saved.urls.map((u: { id: string; url: string }) => ({ id: u.id, url: u.url }));
       set((state) => ({
         tasks: state.tasks.map((t) => t.id === taskId ? { ...t, urls: realUrls } : t),
       }));
@@ -1088,7 +1360,20 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
       const task = state.tasks.find((t) => t.id === id);
       if (!task) continue;
       const newId = `t${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-      newTasks.push({ ...task, id: newId, title: `${task.title} (copia)`, comments: [], activity: [{ id: `a${Date.now()}_dup`, authorId: getCurrentUserId(), action: "duplicó la tarea", createdAt: new Date().toISOString() }] });
+      // Deep-clone every relational collection — see duplicateBoard for the
+      // reasoning. Sharing refs across two tasks in the store is fragile.
+      newTasks.push({
+        ...task,
+        id: newId,
+        title: `${task.title} (copia)`,
+        comments: [],
+        activity: [{ id: `a${Date.now()}_dup`, authorId: getCurrentUserId(), action: "duplicó la tarea", createdAt: new Date().toISOString() }],
+        urls: (task.urls ?? []).map((u) => ({ ...u })),
+        attachments: (task.attachments ?? []).map((a) => ({ ...a })),
+        subtasks: (task.subtasks ?? []).map((s) => ({ ...s })),
+        tags: [...(task.tags ?? [])],
+        blockedBy: [...(task.blockedBy ?? [])],
+      });
       newIds.push(newId);
     }
     set((s) => ({ tasks: [...s.tasks, ...newTasks], boards: s.boards.map((b) => b.id === s.activeBoardId ? { ...b, taskIds: [...b.taskIds, ...newIds] } : b) }));
@@ -1099,8 +1384,12 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
         headers: getAuthHeaders(),
         body: JSON.stringify({ boardId: state.activeBoardId, title: nt.title, status: nt.status, priority: nt.priority, store: nt.store || undefined, assigneeId: nt.assigneeId || undefined }),
       }).then((r) => r.json()).then((saved) => {
+        const serverTask = transformApiTask(saved);
         set((s) => ({
-          tasks: s.tasks.map((t) => t.id === nt.id ? { ...t, id: saved.id } : t),
+          tasks: s.tasks.map((t) => t.id === nt.id ? {
+            ...serverTask,
+            activity: t.activity,
+          } : t),
           boards: s.boards.map((b) => ({ ...b, taskIds: b.taskIds.map((tid) => tid === nt.id ? saved.id : tid) })),
         }));
       }).catch((e) => console.error("API bulk duplicate error:", e));
@@ -1135,7 +1424,10 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     // Apply manual filters
     if (state.filterStore) result = result.filter((t) => t.store === state.filterStore);
     if (state.filterPriority) result = result.filter((t) => t.priority === state.filterPriority);
-    if (state.filterStatus) result = result.filter((t) => t.status === state.filterStatus);
+    if (state.filterStatus) {
+      // filterStatus may be a column id (new) or a legacy Status string.
+      result = result.filter((t) => t.columnId === state.filterStatus || t.status === state.filterStatus);
+    }
     if (state.filterAssignee) result = result.filter((t) => t.assigneeId === state.filterAssignee);
     if (state.filterTags.length > 0) result = result.filter((t) => (t.tags ?? []).some(tagId => state.filterTags.includes(tagId)));
     if (state.filterDateRange) {
@@ -1217,13 +1509,14 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     }
 
     if (lastAction.action === "moveTask") {
-      const { taskId, fromStatus } = lastAction.data;
+      const { taskId, fromStatus, fromColumnId } = lastAction.data;
       set({
-        tasks: state.tasks.map((t) => t.id === taskId ? { ...t, status: fromStatus } : t),
+        tasks: state.tasks.map((t) => t.id === taskId ? { ...t, status: fromStatus, columnId: fromColumnId ?? t.columnId } : t),
         undoStack: newUndoStack,
         redoStack: [...state.redoStack, lastAction],
       });
-      apiPatchTask(taskId, { status: fromStatus });
+      if (fromColumnId) apiPatchTask(taskId, { columnId: fromColumnId });
+      else apiPatchTask(taskId, { status: fromStatus });
       return;
     }
 
@@ -1250,13 +1543,14 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
     }
 
     if (lastAction.action === "moveTask") {
-      const { taskId, toStatus } = lastAction.data;
+      const { taskId, toStatus, toColumnId } = lastAction.data;
       set({
-        tasks: state.tasks.map((t) => t.id === taskId ? { ...t, status: toStatus } : t),
+        tasks: state.tasks.map((t) => t.id === taskId ? { ...t, status: toStatus, columnId: toColumnId ?? t.columnId } : t),
         undoStack: [...state.undoStack, lastAction],
         redoStack: newRedoStack,
       });
-      apiPatchTask(taskId, { status: toStatus });
+      if (toColumnId) apiPatchTask(taskId, { columnId: toColumnId });
+      else apiPatchTask(taskId, { status: toStatus });
       return;
     }
 
@@ -1335,9 +1629,12 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
       id: newId, title: tmpl.title, status: status ?? "por_hacer", priority: tmpl.priority,
       store: tmpl.store ?? "", assigneeId: getCurrentUserId(), campaignType: tmpl.campaignType ?? "",
       campaignName: "", adAccount: "", dueDate: "", urls: [], attachments: [],
-      comments: [], activity: [{ id: `a${Date.now()}`, authorId: getCurrentUserId(), action: "creó tarea desde plantilla", createdAt: new Date().toISOString() }],
+      comments: [], blockedBy: [],
+      activity: [{ id: `a${Date.now()}`, authorId: getCurrentUserId(), action: "creó tarea desde plantilla", createdAt: new Date().toISOString() }],
       subtasks: tmpl.subtasks.map((title, i) => ({ id: `sub_${Date.now()}_${i}`, title, completed: false })),
-      tags: tmpl.tags ?? [],
+      // Clone the template's tags array — do NOT reuse the template's reference,
+      // otherwise every task created from this template would share the same array.
+      tags: [...(tmpl.tags ?? [])],
     };
     set((st) => ({
       tasks: [...st.tasks, newTask],
@@ -1357,8 +1654,14 @@ export const useBoardStore = create<BoardState>()(persist((set, get) => ({
         campaignType: newTask.campaignType || undefined,
       }),
     }).then((r) => r.json()).then((saved) => {
+      const serverTask = transformApiTask(saved);
       set((st) => ({
-        tasks: st.tasks.map((t) => t.id === newId ? { ...t, id: saved.id } : t),
+        tasks: st.tasks.map((t) => t.id === newId ? {
+          ...serverTask,
+          activity: t.activity,
+          subtasks: t.subtasks, // Preserve local subtasks (created separately below)
+          tags: t.tags, // Preserve local tags (created separately below)
+        } : t),
         boards: st.boards.map((b) => ({ ...b, taskIds: b.taskIds.map((id) => id === newId ? saved.id : id) })),
       }));
       // Create subtasks on server
